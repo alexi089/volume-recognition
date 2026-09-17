@@ -460,7 +460,20 @@ gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *b)
 - The synthetic pinch traces come from a C tool, `core/tools/gen_pinch_traces.c` (`make -C core pinch-traces`), not `gen_traces.py`, so the pinch blend exists once (`tests/pinch_motion.h`). Four traces in the manifest: shrink (0.72), grow (1.55), then_fist (0.82, ends by closing the hand) and glimpse (none).
 - `sweep.py` no longer has its own copy of the rule: `verdict.c` is in the library and `bridge.verdict` asks it. Its report gains resize arms and the final scale.
 - Every Makefile target now depends on the Makefile: adding `verdict.c` to `LIB_SRC` did not relink the library, and the bridge test failed on a missing symbol.
-- Steps 2 - 4 are open. Step 2 needs the owner at the camera.
+- Step 3 (README, memory) and Step 4 (review) are done; see below. Step 2 is half done.
+
+**As built, Steps 2 - 4 (2026-09-17 evening):**
+- Step 2, live run: done twice. The first failed on every resize: with the camera in use the Window Server keeps two 10 x 18 pt layer-0 windows in front of everything, and the backend picked one (AXError -25204). Fixed with `win_is_candidate` (layer 0, not ours, at least 100 pt a side), reproduced and confirmed with the camera open. The second run worked ("works", the owner); numbers in the spec's "First live session". From it: `win_write_was_ignored` (a window that has responded and then stops is at its own limit, not ignoring writes), and the events file gained `win_ax_error`, `win_target`, `win_w`, `win_h`.
+- Step 2, NOT done: the guided recordings (`app/record_scripted.sh pinch`, then the five negatives again) and the `sweep.py` analysis. `record_scripted.sh` already has the two pinch clips.
+- Step 4, review: no correctness bug in normal use. Fixed: the frame that lets go of a gesture never arms the next (only reachable with `arm_hold_sec` 0). Open: a size guard for `ReplaySummary` in `bridge._check_abi` (needs `gv_abi_replay_summary_size` in C), and the target name reading empty on the rollback frame (`win_release` clears it before `main.py` asks).
+- State of the tests at the end of the day: `make test` exit 0; 758 C checks in 8 suites, 8 manifest traces, HUD 105, bridge and leak tests.
+- Not yet done from Step 4: the finishing-a-development-branch skill. The branch is pushed; `main` is untouched.
+
+**Open questions for the next session, in the order they matter:**
+1. How did it FEEL? Slow pinch following the fingers, snap pinch doing nothing, closing the hand keeping the size: the owner said "works" and nothing more.
+2. The probable false arm on Terminal while typing (spec, "First live session"). One event; needs the negatives re-recorded with the resize in place.
+3. 16 fps while a window moves. Decide: every other frame, or a writer thread.
+4. 29 of 70 sessions changed nothing. Rollback too eager, arm hold too short, or fine? Needs the guided clips (intent labels) to answer.
 
 ## Self-review notes
 

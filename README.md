@@ -9,18 +9,19 @@ learning C.
 ## Status
 
 Two gestures. **Volume works live** (several sessions; left/right and up/down,
-speed-dependent gain, the glass HUD). **Pinch-to-resize is built and has never
-been tried live**: everything below about it comes from unit tests, replays of
-recorded hands, and a command-line check that really resized a window.
+speed-dependent gain, the glass HUD). **Pinch-to-resize has been tried live
+once** (eight minutes, 70 resizes of real windows; its owner's verdict: "works").
+It is untuned, it halves the frame rate while a window moves, and it has
+probably armed by accident at least once.
 
 | Piece | State |
 |---|---|
-| C core (filter, poses, state machine, two gestures, glue, window geometry, trace parser, replay verdict) | 726 checks across 8 suites, under ASan + UBSan; new logic mutation-checked |
+| C core (filter, poses, state machine, two gestures, glue, window geometry, trace parser, replay verdict) | 758 checks across 8 suites, under ASan + UBSan; new logic mutation-checked |
 | Photo -> MediaPipe -> ctypes -> C state machine | tested (`app/test_bridge.py`) |
 | C -> CoreAudio -> real system volume | works on built-in speakers, and on AirPods in some states; see Known limits |
 | C -> Accessibility -> the front window | `core/build/win scale 0.9` resized a real window about its centre and put it back exactly; one write costs about 14 ms. Fixed-size windows and a missing permission are handled in code and **not yet seen for real** |
 | Live camera loop (`make run`), volume | several live sessions; 29.5 fps with the preview on the CPU delegate; soak-tested for 15,000 frames at a flat 116 MB |
-| Live camera loop, resize | **not run yet.** The overlay, HUD line and error banner were exercised without a camera only |
+| Live camera loop, resize | one session: 70 resizes ending between 0.32x and 2.65x on Chrome, VS Code and Terminal; 29.9 fps idle, **16.3 fps while a window is being written**. The first attempt failed outright (the camera-in-use indicator was picked as the window); fixed. No guided recordings of it yet |
 | Scripted recordings (2 positive, 5 must-do-nothing) | one take. Both positives pass. **Two negatives fail:** touching the face arms the volume slider, and talking with the hands arms the resize once (a 2% twitch, rolled back) |
 | Tuning constants | measured from a handful of recordings of one hand; the resize constants from four ten-second clips |
 
@@ -132,16 +133,18 @@ fixture).
 - **What a pinch cannot do, measured.** A fist and a full pinch are nearly the
   same shape to a 2D camera (thumb still "out", index curled, fingertips 0.07
   against 0.04 hand-lengths apart), and a fist must never mean "shrink to the
-  minimum". So the resize lets go once the index finger reads as curled: one
-  pinch reaches roughly 0.4x - 0.55x, and one spread about 1.3x (a hand only
-  opens so far; 1.7x at best). Further means letting go and pinching again.
+  minimum". So the resize lets go once the index finger reads as curled.
+  Replaying four recorded clips predicted a reach of 0.4x - 0.55x per pinch and
+  1.3x per spread; the live session went from 0.28x to 3.22x, so that prediction
+  was wrong, and why has not been looked into. Further still means letting go
+  and pinching again.
 - **Closing your hand does not resize.** On the way to a fist the fingertips
   pass through every smaller gap. When a resize ends because the hand changed
   shape, it ends on the size from 0.3 s before its last good frame; when the
   hand just leaves, nothing is undone. The cost: a pinch snapped shut in 0.2 s
-  looks exactly like closing the hand and does nothing. Whether a pinch made
-  while watching the window is slow enough is **the open question for the first
-  live try**.
+  looks exactly like closing the hand and does nothing. Live, 29 of 70 resizes
+  ended within 5% of where they began; how many of those were meant to is not
+  known.
 - **A thumb is not a finger.** "Out" is long and straight, as for fingers, with
   its own measured limits. That alone let a pointing hand with the thumb resting
   on the fist arm the resize, so arming also needs the thumb tip clear of the
@@ -271,14 +274,15 @@ live session: no intent labels, so it is a tuning corpus (`stats` only).
   this app running. The same AirPods accepted writes an hour earlier. The cause
   is not yet known (in-ear detection is the leading guess, unverified). There
   is no software workaround; the app shows a red banner.
-- **The resize has not been tried live**, and its range per pinch is small by
-  construction (see "What a pinch cannot do"). A snap pinch does nothing.
+- **The resize is untuned.** One live session, no guided recordings. A snap
+  pinch does nothing. At the end of that session it armed on a terminal window
+  while its owner was typing and halved it: probably an accident.
 - "The front window" is the frontmost ordinary window not belonging to this app
   at the moment the pinch arms. It can surprise; the preview names it.
 - A resized window can end up partly behind the Dock: the menu bar's height is
   measured per display, the Dock's cannot be from C.
-- Writing a window takes about 14 ms inside a 33 ms frame; the frame rate will
-  dip while a resize is moving. By how much is unmeasured.
+- Writing a window costs more than its 14 ms suggests: the loop runs at 16 fps
+  on frames that write, against 30 otherwise.
 - Some apps enforce minimum sizes or aspect ratios; the window then settles on
   what the app allows, which is reported as success.
 - RGB webcam: degrades in dim light. BMW's system uses an infrared depth camera.

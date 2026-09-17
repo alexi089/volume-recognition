@@ -1,7 +1,8 @@
 # Pinch to resize the front window: design
 
-Date: 2026-09-17. Status: approved by the owner; the recogniser half is built
-(gesture definitions, resize gesture), the window half is not. Sections marked
+Date: 2026-09-17. Status: built end to end and tried live once (see "First live
+session"); the owner's verdict was "works". Tuning, guided recordings and the
+false-arm question are open. Sections marked
 "measured" were revised from real clips after approval; the revisions narrow the
 gesture's range and are listed under "What building it changed". First gesture of
 iteration 2 (the four-finger swipe follows and is out of scope here).
@@ -199,6 +200,41 @@ Bad news first: the gesture is narrower than the approved design said.
   changes, up to 1.02x, rolled back to 1.00). A window would have twitched by 2%
   and returned. "Rolled back" is not "nothing happened": `none` means no change
   of either kind, and that clip fails it. The other five clips pass.
+
+### First live session (2026-09-17, 475 s, `traces/real_resize_second_session.*`, untracked)
+
+The owner's verdict: "works". No detail yet on how a slow pinch, a snap pinch or
+closing the hand felt; ask. What the recording shows:
+
+- **The first attempt failed on every resize** (camera indicator picked as the
+  target; see the window backend section). Everything below is the second run.
+- 70 resize sessions (63 on Chrome, 5 on VS Code, 2 on Terminal) and 23 volume
+  sessions in one run; the two never crossed.
+- **The predicted range was wrong.** Sessions ended between 0.32x and 2.65x and
+  touched 0.28x - 3.22x. "One pinch reaches about 0.4x - 0.55x, one spread about
+  1.3x" came from replaying four blind clips and does not describe live use. Why
+  (arming with the fingers closer, a slower pinch keeping the index uncurled,
+  or something else) has not been looked into.
+- **Frame rate: 29.9 fps idle, 16.3 fps on frames that write the window** (95th
+  percentile frame 75 ms). The 14 ms measured for one write understated it. The
+  candidates stand: write at most every other frame, or from a second thread.
+- 29 of the 70 sessions ended within 5% of where they began, and 26 lasted under
+  a second. Without intent labels these cannot be split into snap pinches and
+  rollbacks doing their job versus arms nobody asked for.
+- **A probable false arm:** in the last seconds, with the owner back at the
+  keyboard, a resize armed on Terminal for 3.3 s and took it to 0.52x. It was
+  still armed when the app was stopped, so nothing rolled it back. Typing is
+  supposed to do nothing (`real_typing` passes on the scripted take); this says
+  otherwise, once.
+- 131 window writes in 11 sessions raised a false "did not change size" banner
+  (one Chrome window pinned at what was probably its minimum size). Fixed the
+  same evening (`win_write_was_ignored`); the fix has not been seen live, and
+  the minimum-size explanation is unconfirmed (the recording did not hold the
+  window's size then; it does now).
+- The review of the iteration's diff found no correctness bug in normal use and
+  one edge case (release and re-arm on a single frame when `arm_hold_sec` is 0),
+  fixed. Open from it: a size guard for `ReplaySummary` in `bridge.py`, and the
+  target name reading empty on the one rollback frame.
 
 ### The window backend (`window_macos.c`, behind `window.h`)
 
