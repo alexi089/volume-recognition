@@ -54,12 +54,26 @@ CAPTURE_SIZE = (1280, 720)
 PREVIEW_WIDTH = 960
 
 
-def detect(landmarker: vision.HandLandmarker, bgr, ts_ms: int):
-    """One frame through MediaPipe; returns the 21 landmarks of the first hand, or None.
-    The one place a frame is handed to MediaPipe, shared by the camera loop and the leak test."""
+def handedness_of(result) -> int:
+    """+1 right, -1 left, 0 unsure: MediaPipe's label for the first hand, passed on as it is.
+    (The label is for the image it was given, which here is mirrored. What that means for
+    "is the palm facing the camera" is the C core's business, not this file's.)"""
+    if not result.handedness or not result.handedness[0]:
+        return 0
+    label = result.handedness[0][0].category_name
+    return 1 if label == "Right" else -1 if label == "Left" else 0
+
+
+def detect(landmarker: vision.HandLandmarker, bgr, ts_ms: int, with_handedness: bool = False):
+    """One frame through MediaPipe; returns the 21 landmarks of the first hand, or None
+    (and its handedness too, if asked). The one place a frame is handed to MediaPipe,
+    shared by the camera loop and the leak test."""
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     result = landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ts_ms)
-    return result.hand_landmarks[0] if result.hand_landmarks else None
+    landmarks = result.hand_landmarks[0] if result.hand_landmarks else None
+    if with_handedness:
+        return landmarks, (handedness_of(result) if landmarks else 0)
+    return landmarks
 
 
 def detect_photo(landmarker: vision.HandLandmarker, bgr):
@@ -175,17 +189,17 @@ class Recorder:
         self._file = open(trace, "w")
         self._file.write(f"# aspect={aspect:.6f}\n")
         cols = ",".join(f"x{i},y{i},z{i}" for i in range(bridge.NUM_LANDMARKS))
-        self._file.write(f"t_sec,present,{cols}\n")
+        self._file.write(f"t_sec,present,{cols},hand\n")
         self._events_path = trace.with_suffix(".events.csv")  # created on the first event
 
-    def write(self, t_sec: float, landmarks, step=None) -> None:
+    def write(self, t_sec: float, landmarks, step=None, handedness: int = 0) -> None:
         if self._file is None:
             return
         if landmarks:
             values = ",".join(f"{p.x:.6f},{p.y:.6f},{p.z:.6f}" for p in landmarks)
         else:
             values = ",".join(["0"] * (3 * bridge.NUM_LANDMARKS))
-        self._file.write(f"{t_sec:.6f},{1 if landmarks else 0},{values}\n")
+        self._file.write(f"{t_sec:.6f},{1 if landmarks else 0},{values},{handedness if landmarks else 0}\n")
         if step is not None:
             if self._events is None:  # tools that record landmarks only leave no empty file behind
                 self._events = open(self._events_path, "w")
@@ -335,7 +349,7 @@ def main() -> None:
                 ts_ms = max(int((now - start) * 1000), last_ts_ms + 1)
                 last_ts_ms = ts_ms
 
-                landmarks = detect(landmarker, bgr, ts_ms)
+                landmarks, handedness = detect(landmarker, bgr, ts_ms, with_handedness=True)
 
                 # Guided recording: nothing is recorded and nothing can move the
                 # volume until the lead-in is over, so a clip holds only the
@@ -345,9 +359,9 @@ def main() -> None:
                 if args.duration is not None and t_sec >= args.duration:
                     break
                 if live:
-                    step = gesture.step(landmarks, t_sec)
+                    step = gesture.step(landmarks, t_sec, handedness)
                     error = latch.update(describe_error(step.vol), now)
-                    recorder.write(t_sec, landmarks, step)
+                    recorder.write(t_sec, landmarks, step, handedness)
                     hud.send(step.out.state, step.out.volume, error, step.out.axis)
 
                 dt = now - last_frame_t

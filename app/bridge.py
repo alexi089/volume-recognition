@@ -30,6 +30,7 @@ class Frame(C.Structure):
     _fields_ = [
         ("lm", Point * NUM_LANDMARKS),
         ("present", C.c_int),
+        ("handedness", C.c_int),
         ("t_sec", C.c_double),
     ]
 
@@ -132,9 +133,10 @@ def device_name() -> tuple[int, str]:
     return status, buf.value.decode(errors="replace")
 
 
-def _fill(frame: Frame, landmarks, t_sec: float) -> None:
+def _fill(frame: Frame, landmarks, t_sec: float, handedness: int = 0) -> None:
     frame.t_sec = t_sec
     frame.present = 1 if landmarks else 0
+    frame.handedness = handedness if landmarks else 0
     if landmarks:
         for i, p in enumerate(landmarks):
             frame.lm[i].x, frame.lm[i].y, frame.lm[i].z = p.x, p.y, p.z
@@ -166,14 +168,15 @@ class Gesture:
         _lib.gv_destroy(self._ctx)
         self._ctx = None
 
-    def step(self, landmarks, t_sec: float) -> StepResult:
-        """One camera frame: sync with system volume, update, apply."""
-        _fill(self._frame, landmarks, t_sec)
+    def step(self, landmarks, t_sec: float, handedness: int = 0) -> StepResult:
+        """One camera frame: sync with system volume, update, apply.
+        handedness: +1 right, -1 left, 0 unknown, as the landmark model labels it."""
+        _fill(self._frame, landmarks, t_sec, handedness)
         return _lib.gv_step_system(self._ctx, C.byref(self._frame))
 
-    def update(self, landmarks, t_sec: float) -> Output:
+    def update(self, landmarks, t_sec: float, handedness: int = 0) -> Output:
         """The pure state machine only; never touches the system volume."""
-        _fill(self._frame, landmarks, t_sec)
+        _fill(self._frame, landmarks, t_sec, handedness)
         return _lib.gv_update(self._ctx, C.byref(self._frame))
 
     def set_current_volume(self, volume: float) -> None:

@@ -2,7 +2,7 @@
  * trace.h - parse the landmark CSV written by `app/main.py --record`.
  *
  *   # aspect=1.777778
- *   t_sec,present,x0,y0,z0,...,x20,y20,z20
+ *   t_sec,present,x0,y0,z0,...,x20,y20,z20[,hand]
  *   0.033412,1,0.284924,0.761340,0.000001,...
  */
 #ifndef GV_TRACE_H

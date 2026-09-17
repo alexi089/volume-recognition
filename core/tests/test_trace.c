@@ -56,7 +56,8 @@ static void wrong_field_count_is_malformed(void)
 {
     gv_frame f;
     CHECK(gv_trace_parse_line(row("1.0", "1", 62), &f) == GV_TRACE_MALFORMED);
-    CHECK(gv_trace_parse_line(row("1.0", "1", 64), &f) == GV_TRACE_MALFORMED);
+    CHECK(gv_trace_parse_line(row("1.0", "1", 64), &f) == GV_TRACE_MALFORMED); /* 66th field is 63.5: not a handedness */
+    CHECK(gv_trace_parse_line(row("1.0", "1", 65), &f) == GV_TRACE_MALFORMED);
     CHECK(gv_trace_parse_line("1.0\n", &f) == GV_TRACE_MALFORMED);
 }
 
@@ -89,6 +90,31 @@ static void non_finite_values_are_malformed(void)
     CHECK(gv_trace_parse_line(line, &f) == GV_TRACE_MALFORMED);
 }
 
+/* Newer recordings carry a 66th column: which hand MediaPipe thinks it is
+ * (+1 right, -1 left, 0 unsure). Older ones have 65 and mean "unknown". */
+static void handedness_column_is_optional(void)
+{
+    gv_frame f;
+    memset(&f, 0xAA, sizeof f);
+    CHECK(gv_trace_parse_line(row("1.0", "1", 63), &f) == GV_TRACE_FRAME);
+    CHECK(f.handedness == 0);
+
+    char line[2048];
+    snprintf(line, sizeof line, "%s,-1", row("1.0", "1", 63));
+    CHECK(gv_trace_parse_line(line, &f) == GV_TRACE_FRAME);
+    CHECK(f.handedness == -1);
+    CHECK_NEAR(f.lm[20].z, 62.5f, 1e-6); /* the landmarks are where they were */
+
+    snprintf(line, sizeof line, "%s,1\n", row("1.0", "1", 63));
+    CHECK(gv_trace_parse_line(line, &f) == GV_TRACE_FRAME);
+    CHECK(f.handedness == 1);
+
+    snprintf(line, sizeof line, "%s,2", row("1.0", "1", 63));
+    CHECK(gv_trace_parse_line(line, &f) == GV_TRACE_MALFORMED); /* not a hand we know */
+    snprintf(line, sizeof line, "%s,1,0.5", row("1.0", "1", 63));
+    CHECK(gv_trace_parse_line(line, &f) == GV_TRACE_MALFORMED); /* 67 fields */
+}
+
 static void aspect_comment_is_read(void)
 {
     float a = 0.0f;
@@ -111,6 +137,7 @@ int main(void)
     RUN(wrong_field_count_is_malformed);
     RUN(non_numeric_field_is_malformed);
     RUN(non_finite_values_are_malformed);
+    RUN(handedness_column_is_optional);
     RUN(aspect_comment_is_read);
     return TEST_SUMMARY();
 }

@@ -6,6 +6,7 @@
 #include <string.h>
 
 #define FIELDS_PER_ROW (2 + 3 * GV_NUM_LANDMARKS) /* t_sec, present, 21 * xyz */
+#define MAX_FIELDS     (FIELDS_PER_ROW + 1)       /* plus an optional handedness column */
 
 static const char *skip_space(const char *p)
 {
@@ -28,8 +29,11 @@ gv_trace_result gv_trace_parse_line(const char *line, gv_frame *out)
     if (*p == '\0' || *p == '#' || strncmp(p, "t_sec", 5) == 0)
         return GV_TRACE_SKIP;
 
-    double values[FIELDS_PER_ROW];
-    for (int i = 0; i < FIELDS_PER_ROW; i++) {
+    /* The handedness column was added after the first recordings were made, so
+     * a row has either 65 fields or 66. `count` ends up as which. */
+    double values[MAX_FIELDS];
+    int count = 0;
+    for (int i = 0; i < MAX_FIELDS; i++) {
         char *end;
         values[i] = strtod(p, &end);
         if (end == p)
@@ -39,23 +43,27 @@ gv_trace_result gv_trace_parse_line(const char *line, gv_frame *out)
         if (!isfinite(values[i]))
             return GV_TRACE_MALFORMED;
         p = skip_space(end);
+        count = i + 1;
 
-        int last = (i == FIELDS_PER_ROW - 1);
-        if (last) {
-            if (*p != '\0')
-                return GV_TRACE_MALFORMED; /* extra fields */
-        } else {
-            if (*p != ',')
-                return GV_TRACE_MALFORMED; /* too few fields, or junk */
-            p = skip_space(p + 1);
-        }
+        if (*p == '\0')
+            break; /* end of the row */
+        if (*p != ',' || count == MAX_FIELDS)
+            return GV_TRACE_MALFORMED; /* junk after a number, or too many fields */
+        p = skip_space(p + 1);
     }
+    if (count < FIELDS_PER_ROW)
+        return GV_TRACE_MALFORMED; /* too few fields */
 
     if (values[1] != 0.0 && values[1] != 1.0)
         return GV_TRACE_MALFORMED;
 
+    double hand = (count == MAX_FIELDS) ? values[MAX_FIELDS - 1] : 0.0;
+    if (hand != -1.0 && hand != 0.0 && hand != 1.0)
+        return GV_TRACE_MALFORMED;
+
     out->t_sec = values[0];
     out->present = (int)values[1];
+    out->handedness = (int)hand;
     for (int i = 0; i < GV_NUM_LANDMARKS; i++) {
         out->lm[i].x = (float)values[2 + 3 * i];
         out->lm[i].y = (float)values[3 + 3 * i];

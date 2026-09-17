@@ -31,6 +31,7 @@ typedef struct {
 typedef struct {
     gv_point lm[GV_NUM_LANDMARKS];
     int      present; /* 0 when no hand was found; lm is then ignored */
+    int      handedness; /* +1 right hand, -1 left, 0 unknown (as labelled by the landmark model) */
     double   t_sec;   /* capture time in seconds, from a monotonic clock */
 } gv_frame;
 
