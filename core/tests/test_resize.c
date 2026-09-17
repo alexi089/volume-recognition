@@ -340,6 +340,31 @@ static void each_resize_starts_again_from_one(void)
     finish(&s);
 }
 
+/* With no arm hold at all (a valid setting), a stalled app that comes back to
+ * a hand in the arm pose would let go and arm again on ONE frame. Anything
+ * watching the state would then see one long gesture where there were two, and
+ * the glue would keep resizing the first gesture's window from the second
+ * gesture's numbers. So the frame that lets go is never an armed frame. */
+static void the_frame_that_lets_go_is_never_an_armed_frame(void)
+{
+    gv_config c = pinned();
+    c.arm_hold_sec = 0.0f;
+    session s = start_with(c);
+    hold_pinch(&s, 0.0f, 0.3);
+    ramp(&s, 0.0f, 0.2f, 0.5);
+    CHECK(s.out.state == GV_ARMED && s.out.scale < 0.95f);
+
+    s.t += 1.0;                 /* the app stalls for a second: no frames at all */
+    gv_frame open = pinch(0.0f);
+    frame(&s, &open);           /* and comes back to the arm pose */
+    CHECK(s.out.state != GV_ARMED);
+    CHECK(s.releases == 1);
+    frame(&s, &open);           /* the next frame may arm, as a new gesture from 1.0 */
+    CHECK(s.out.state == GV_ARMED && s.out.kind == GV_KIND_RESIZE);
+    CHECK_NEAR(s.out.scale, 1.0f, 1e-6);
+    finish(&s);
+}
+
 static void a_pinched_start_does_not_arm(void)
 {
     session s = start();
@@ -419,6 +444,7 @@ int main(void)
     RUN(a_short_resize_rolls_back_to_its_own_start);
     RUN(a_hand_that_just_leaves_keeps_the_last_size);
     RUN(each_resize_starts_again_from_one);
+    RUN(the_frame_that_lets_go_is_never_an_armed_frame);
     RUN(a_pinched_start_does_not_arm);
     RUN(volume_and_resize_never_cross);
     RUN(a_wobbling_gap_does_not_chatter);

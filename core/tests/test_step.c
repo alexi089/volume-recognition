@@ -302,6 +302,27 @@ static void a_hand_that_leaves_lets_go_of_the_window_once(void)
 
 /* A window that cannot be resized: said on every armed frame (the overlay shows
  * it for as long as the hand is up), and nothing is written or let go. */
+/* Two gestures back to back, with no arm hold and a stall between them: the
+ * first window is let go and the second is taken afresh. */
+static void a_second_gesture_takes_hold_of_its_own_window(void)
+{
+    fake_reset(0.40f);
+    gv_config cfg = gv_default_config();
+    cfg.aspect = FIXTURE_REAL_ASPECT;
+    cfg.arm_hold_sec = 0.0f;
+    gv_ctx *ctx = gv_create(&cfg);
+    now = 0.0;
+    step_pinch(ctx, 0.0f, 0.0f, 0.3);
+    step_pinch(ctx, 0.0f, 0.2f, 0.5);
+    CHECK(fake_acquire_calls == 1 && fake_release_calls == 0);
+    now += 1.0; /* a stall, then the arm pose again */
+    step_pinch(ctx, 0.0f, 0.0f, 0.3);
+    CHECK(last.out.state == GV_ARMED);
+    CHECK(fake_release_calls == 1);
+    CHECK(fake_acquire_calls == 2);
+    gv_destroy(ctx);
+}
+
 static void a_window_that_cannot_be_taken_is_reported_and_left_alone(void)
 {
     fake_reset(0.40f);
@@ -404,6 +425,7 @@ int main(void)
     RUN(a_changed_scale_is_written_to_the_window);
     RUN(the_rolled_back_scale_is_written_before_the_window_is_let_go);
     RUN(a_hand_that_leaves_lets_go_of_the_window_once);
+    RUN(a_second_gesture_takes_hold_of_its_own_window);
     RUN(a_window_that_cannot_be_taken_is_reported_and_left_alone);
     RUN(a_failing_write_is_reported_on_that_frame);
     RUN(a_volume_slide_never_touches_the_window);

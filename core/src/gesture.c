@@ -314,6 +314,7 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
 
     /* A gesture that ends on this frame may have a last word (see on_release). */
     int final_changed = 0;
+    int let_go_this_frame = 0;
     gv_kind final_kind = GV_KIND_NONE;
     float final_scale = 1.0f;
 
@@ -352,6 +353,7 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
                 final_scale = ctx->reported_scale;
             }
         }
+        let_go_this_frame = (ctx->state == GV_ARMED);
         go_idle(ctx);
         /* Having just let go, this frame is judged as a fresh start. */
         good = usable && find_arming_gesture(ctx, frame) != NULL;
@@ -375,7 +377,11 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
             ctx->scale_sum += gv_hand_scale(frame, cfg->aspect);
             ctx->scale_count++;
 
-            if (t - ctx->arm_started_t >= (double)cfg->arm_hold_sec) {
+            /* The frame that lets go of one gesture never arms the next, even
+             * with no arm hold: callers tell gestures apart by seeing a frame
+             * that is not ARMED between them (step.c lets go of one window and
+             * takes hold of the next on exactly that). The next frame may arm. */
+            if (!let_go_this_frame && t - ctx->arm_started_t >= (double)cfg->arm_hold_sec) {
                 float scale = ctx->scale_sum / (float)ctx->scale_count;
                 if (scale < MIN_HAND_SCALE) {
                     go_idle(ctx);
