@@ -1,11 +1,16 @@
 /*
  * replay - feed a recorded landmark trace through the gesture core and check
- * what it did to the volume.
+ * what it would have done to the volume and to the front window. (Would have:
+ * this is the pure core, nothing real is touched.)
  *
  *   replay traces/slide_up.csv up        volume must end clearly higher
  *   replay traces/slide_down.csv down    ... clearly lower
- *   replay traces/nose_scratch.csv none  no volume change at all
+ *   replay traces/pinch_out.csv grow     a window must end clearly bigger
+ *   replay traces/pinch_in.csv shrink    ... clearly smaller
+ *   replay traces/nose_scratch.csv none  no change of either kind, at all
  *   replay traces/session.csv stats      no verdict, just numbers, for tuning
+ *
+ * The rule itself is in src/verdict.c, where it is tested.
  *
  * Exit status: 0 expectation met (always, for stats), 1 not met, 2 usage or
  * unreadable trace.
@@ -20,9 +25,9 @@
 
 #include "gesture.h"
 #include "trace.h"
+#include "verdict.h"
 
 #define START_VOLUME 0.5f
-#define CLEAR_CHANGE 0.05f /* "clearly" higher or lower */
 
 /* Lengths of the armed sessions seen so far. The count is not known up
  * front, so the array grows: realloc either extends the block in place or
@@ -61,9 +66,10 @@ static int by_value(const void *pa, const void *pb)
 
 int main(int argc, char **argv)
 {
-    if (argc != 3 || (strcmp(argv[2], "up") != 0 && strcmp(argv[2], "down") != 0 &&
-                      strcmp(argv[2], "none") != 0 && strcmp(argv[2], "stats") != 0)) {
-        fputs("usage: replay <trace.csv> <up|down|none|stats>\n", stderr);
+    gv_expectation expectation = GV_EXPECT_NONE;
+    const int stats_only = argc == 3 && strcmp(argv[2], "stats") == 0;
+    if (argc != 3 || (!stats_only && !gv_expectation_parse(argv[2], &expectation))) {
+        fputs("usage: replay <trace.csv> <up|down|grow|shrink|none|stats>\n", stderr);
         return 2;
     }
     const char *path = argv[1];
@@ -78,7 +84,9 @@ int main(int argc, char **argv)
     gv_config cfg = gv_default_config();
     gv_ctx *ctx = NULL;
     gv_output out = { GV_IDLE, START_VOLUME, 0, GV_AXIS_NONE, GV_KIND_NONE, 1.0f };
-    int frames = 0, armed_frames = 0, changes = 0, line_no = 0, status = 0;
+    int frames = 0, armed_frames = 0, line_no = 0, status = 0;
+    gv_replay_summary seen = { 0.0f, 0, 0, 1.0f };
+    int resize_sessions = 0;
 
     durations sessions = { NULL, 0, 0 };
     gv_state prev_state = GV_IDLE;
@@ -125,7 +133,17 @@ int main(int argc, char **argv)
         out = gv_update(ctx, &frame);
         frames++;
         armed_frames += (out.state == GV_ARMED);
-        changes += out.changed;
+        /* `changed` belongs to whichever gesture is active. A resize's last
+         * word arrives on the frame it goes idle, so look at the kind, not
+         * the state. */
+        if (out.changed && out.kind == GV_KIND_VOLUME)
+            seen.volume_changes++;
+        if (out.changed && out.kind == GV_KIND_RESIZE) {
+            seen.resize_changes++;
+            seen.final_scale = out.scale;
+        }
+        if (out.state == GV_ARMED && prev_state != GV_ARMED && out.kind == GV_KIND_RESIZE)
+            resize_sessions++;
 
         if (out.state == GV_ARMED && prev_state != GV_ARMED)
             armed_since = frame.t_sec;
@@ -159,7 +177,9 @@ int main(int argc, char **argv)
         return status;
     }
 
-    if (strcmp(expect, "stats") == 0) {
+    seen.volume_delta = out.volume - START_VOLUME;
+
+    if (stats_only) {
         int short_ones = 0;
         double armed_total = 0.0;
         for (int i = 0; i < sessions.count; i++) {
@@ -174,23 +194,18 @@ int main(int argc, char **argv)
                sessions.count);
         printf("  session length: median %.1f s, shortest %.2f s, %d under 1 s\n", median,
                sessions.count ? sessions.sec[0] : 0.0, short_ones);
-        printf("  volume: %d changes, total travel %.2f, biggest single-frame step %.3f\n", changes,
-               travel, biggest_step);
+        printf("  volume: %d changes, total travel %.2f, biggest single-frame step %.3f\n",
+               seen.volume_changes, travel, biggest_step);
+        printf("  resize: %d of those sessions, %d changes, final scale %.2f\n", resize_sessions,
+               seen.resize_changes, seen.final_scale);
         free(sessions.sec);
         return 0;
     }
     free(sessions.sec);
 
-    float delta = out.volume - START_VOLUME;
-    int ok;
-    if (strcmp(expect, "up") == 0)
-        ok = delta >= CLEAR_CHANGE;
-    else if (strcmp(expect, "down") == 0)
-        ok = delta <= -CLEAR_CHANGE;
-    else
-        ok = (changes == 0);
-
-    printf("%-4s %-40s expect %-4s frames %4d  armed %4d  changes %3d  volume %.2f -> %.2f\n",
-           ok ? "ok" : "FAIL", path, expect, frames, armed_frames, changes, START_VOLUME, out.volume);
+    int ok = gv_verdict(expectation, &seen);
+    printf("%-4s %-40s expect %-6s frames %4d  armed %4d  volume %.2f -> %.2f (%d changes)  scale %.2f (%d changes)\n",
+           ok ? "ok" : "FAIL", path, expect, frames, armed_frames, START_VOLUME, out.volume,
+           seen.volume_changes, seen.final_scale, seen.resize_changes);
     return ok ? 0 : 1;
 }

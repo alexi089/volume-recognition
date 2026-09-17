@@ -15,12 +15,15 @@ SAN     := -fsanitize=address,undefined -fno-omit-frame-pointer
 # already had: test_step missed volume.h, which it includes through step.h),
 # and a stale binary tests the wrong definitions without saying so. The whole
 # project compiles in about a second, so precision here buys nothing.
-HDRS    := $(wildcard include/*.h src/*.h tests/*.h)
+# The Makefile is on the list too: a source added to a target's list below makes
+# that target stale, and make only notices if the Makefile is a prerequisite.
+# (Found when verdict.c joined LIB_SRC and the library was not relinked.)
+HDRS    := $(wildcard include/*.h src/*.h tests/*.h) Makefile
 
-TESTS   := test_filter test_pose test_gesture test_resize test_step test_trace test_window_math
+TESTS   := test_filter test_pose test_gesture test_resize test_step test_trace test_window_math test_verdict
 TEST_BINS := $(addprefix $(BUILD)/,$(TESTS))
 
-.PHONY: all test replay clean
+.PHONY: all test replay pinch-traces clean
 
 all: $(BUILD)/vol $(BUILD)/win $(BUILD)/libgesture.dylib
 
@@ -47,12 +50,15 @@ $(BUILD)/test_gesture: tests/test_gesture.c $(CORE_SRC) $(HDRS) | $(BUILD)
 $(BUILD)/test_resize: tests/test_resize.c $(CORE_SRC) $(HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) tests/test_resize.c $(CORE_SRC) -lm -o $@
 
+$(BUILD)/test_verdict: tests/test_verdict.c src/verdict.c $(HDRS) | $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) tests/test_verdict.c src/verdict.c -lm -o $@
+
 $(BUILD)/test_window_math: tests/test_window_math.c src/window_math.c $(HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) tests/test_window_math.c src/window_math.c -lm -o $@
 
 # The shared library the Python side loads with ctypes. No sanitizers here: an
 # ASan-instrumented dylib cannot be loaded into an uninstrumented Python.
-LIB_SRC := $(CORE_SRC) src/step.c src/step_system.c src/volume_macos.c src/window_math.c src/window_macos.c
+LIB_SRC := $(CORE_SRC) src/step.c src/step_system.c src/volume_macos.c src/window_math.c src/window_macos.c src/verdict.c
 
 $(BUILD)/libgesture.dylib: $(LIB_SRC) $(HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) -O2 -dynamiclib $(LIB_SRC) $(AUDIO) $(AX) -lm -o $@
@@ -65,8 +71,16 @@ $(BUILD)/test_step: tests/test_step.c src/step.c $(CORE_SRC) $(HDRS) | $(BUILD)
 $(BUILD)/test_trace: tests/test_trace.c src/trace.c $(HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) tests/test_trace.c src/trace.c -lm -o $@
 
-$(BUILD)/replay: tools/replay.c src/trace.c $(CORE_SRC) $(HDRS) | $(BUILD)
-	$(CC) $(CFLAGS) $(SAN) tools/replay.c src/trace.c $(CORE_SRC) -lm -o $@
+$(BUILD)/replay: tools/replay.c src/trace.c src/verdict.c $(CORE_SRC) $(HDRS) | $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) tools/replay.c src/trace.c src/verdict.c $(CORE_SRC) -lm -o $@
+
+# Writes the synthetic pinch traces into ../traces/ (they are committed; run this
+# only when the motion or the fixtures change).
+$(BUILD)/gen_pinch_traces: tools/gen_pinch_traces.c src/pose.c $(HDRS) | $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) -Itests tools/gen_pinch_traces.c src/pose.c -lm -o $@
+
+pinch-traces: $(BUILD)/gen_pinch_traces
+	./$(BUILD)/gen_pinch_traces ../traces
 
 # Run every test binary; stop at the first one that fails.
 test: $(TEST_BINS) replay

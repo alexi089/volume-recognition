@@ -133,6 +133,16 @@ def main() -> int:
     status, name = bridge.win_target_name()
     check(status == -2 and name == "", "no window is held outside a resize")
 
+    # The replay verdict is C's (core/src/verdict.c); Python only asks it.
+    check(bridge.verdict("shrink", 0.0, 0, 12, 0.7) and not bridge.verdict("grow", 0.0, 0, 12, 0.7),
+          "the C verdict answers through the bridge")
+    check(not bridge.verdict("none", 0.0, 0, 2, 1.0), "none fails on a resize change even when the scale came back")
+    try:
+        bridge.verdict("sideways", 0.0, 0, 0, 1.0)
+        check(False, "an unknown expectation is rejected")
+    except ValueError:
+        check(True, "an unknown expectation is rejected")
+
     # The step result carries the window status, and an idle frame reports no trouble.
     with bridge.Gesture(aspect=aspect) as g:
         r = g.step(None, 0.0)

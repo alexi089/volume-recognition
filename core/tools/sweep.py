@@ -1,7 +1,7 @@
 """Replay the scripted recordings through the C core under different settings.
 
 The tuning rule: minimise dropped slides on the positive clips SUBJECT TO zero
-volume change on every negative clip. This prints, for each candidate config,
+change, of the volume or of a window, on every negative clip. This prints, for each candidate config,
 what every clip did, so that choice is made from numbers rather than feel.
 
     .venv/bin/python core/tools/sweep.py                 # the shipped defaults
@@ -82,28 +82,35 @@ def run_clip(name: str, overrides: dict):
     aspect, rows = load_trace(ROOT / "traces" / f"{name}.csv")
     with make_gesture(aspect, overrides) as g:
         g.set_current_volume(START_VOLUME)
-        sessions, changes, armings, prev, t0, volume = [], 0, 0, bridge.IDLE, 0.0, START_VOLUME
+        sessions, armings, prev, t0, volume = [], 0, bridge.IDLE, 0.0, START_VOLUME
+        volume_changes = resize_changes = resize_arms = 0
+        final_scale = 1.0
         for t, lm, hand in rows:
             o = g.update(lm, t, hand)
             if o.state == bridge.ARMING and prev == bridge.IDLE:
                 armings += 1
             if o.state == bridge.ARMED and prev != bridge.ARMED:
                 t0 = t
+                resize_arms += o.kind == bridge.KIND_RESIZE
             if prev == bridge.ARMED and o.state != bridge.ARMED:
                 sessions.append(t - t0)
-            changes += o.changed
+            # as core/tools/replay.c counts them: by kind, and a resize's last
+            # word (on the frame it goes idle) is its final scale
+            if o.changed and o.kind == bridge.KIND_VOLUME:
+                volume_changes += 1
+            if o.changed and o.kind == bridge.KIND_RESIZE:
+                resize_changes += 1
+                final_scale = o.scale
             prev, volume = o.state, o.volume
         if prev == bridge.ARMED:
             sessions.append(rows[-1][0] - t0)
-    return {"armings": armings, "sessions": sessions, "changes": changes, "delta": volume - START_VOLUME}
+    return {"armings": armings, "sessions": sessions, "changes": volume_changes + resize_changes,
+            "volume_changes": volume_changes, "resize_changes": resize_changes, "resize_arms": resize_arms,
+            "delta": volume - START_VOLUME, "final_scale": final_scale}
 
 
 def verdict(expect: str, r: dict) -> bool:
-    if expect == "up":
-        return r["delta"] >= 0.05
-    if expect == "down":
-        return r["delta"] <= -0.05
-    return r["changes"] == 0
+    return bridge.verdict(expect, r["delta"], r["volume_changes"], r["resize_changes"], r["final_scale"])
 
 
 def report(overrides: dict, clips, verbose: bool) -> tuple[int, int, int]:
@@ -121,9 +128,10 @@ def report(overrides: dict, clips, verbose: bool) -> tuple[int, int, int]:
         else:
             short += under1
         lines.append(f"    {'ok  ' if ok else 'FAIL'} {name:22s} expect {expect:4s} armings {r['armings']:3d}  armed {n:2d}"
-                     f" (median {med:4.1f}s, {under1} under 1s)  changes {r['changes']:4d}  volume {r['delta']:+.2f}")
+                     f" (median {med:4.1f}s, {under1} under 1s)  changes {r['changes']:4d}  volume {r['delta']:+.2f}"
+                     f"  resize arms {r['resize_arms']:2d}  scale {r['final_scale']:.2f}")
     label = " ".join(f"{k}={v}" for k, v in overrides.items()) or "shipped defaults"
-    print(f"{label}\n  negatives failing: {bad_neg}, false volume changes: {false_changes}, short positive slides: {short}")
+    print(f"{label}\n  negatives failing: {bad_neg}, false changes (volume or window): {false_changes}, short positive slides: {short}")
     if verbose:
         print("\n".join(lines))
     return bad_neg, false_changes, short

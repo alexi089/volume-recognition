@@ -1,5 +1,8 @@
 # Traces replayed by `make -C core replay` (part of `make test`).
-# <file, relative to traces/>  <up|down|none>
+# <file, relative to traces/>  <up|down|grow|shrink|none>
+#   up / down      the volume must end clearly higher / lower, and no window may be touched
+#   grow / shrink  a window must end clearly bigger / smaller, and the volume may not move
+#   none           no change of either kind, at all
 #
 # The synthetic_* files come from core/tools/gen_traces.py: real hand shapes,
 # scripted motion, no jitter. Add real recordings below as they are made:
@@ -11,3 +14,12 @@ synthetic_slide_right.csv          up
 synthetic_slide_left.csv           down
 synthetic_other_shapes_sweep.csv   none
 synthetic_glimpse_of_pose.csv      none
+
+# From core/tools/gen_pinch_traces.c (`make -C core pinch-traces`): the real
+# pinch-ready, pinched and fist frames, blended. They check the path from a
+# trace file to a verdict; they are not evidence that a real pinch works.
+# then_fist ends by closing the hand; the size held before that must stand.
+synthetic_pinch_shrink.csv         shrink
+synthetic_pinch_grow.csv           grow
+synthetic_pinch_then_fist.csv      shrink
+synthetic_pinch_glimpse.csv        none

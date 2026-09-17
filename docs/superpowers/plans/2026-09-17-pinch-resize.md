@@ -450,10 +450,17 @@ gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *b)
 
 ### Task 10: Live check, traces, docs, review
 
-- [ ] **Step 1:** `replay` learns `grow` / `shrink` (final `scale` above 1.05 / below 0.95, where `scale` is the last reported while armed) and prints the final scale; test the verdict function in `test_trace.c`'s style with synthetic traces from `gen_traces.py` (pinch-ready fixture with the gap ramped; added to `traces/manifest.txt`).
+- [x] **Step 1 (done 2026-09-17; see "As built" below):** `replay` learns `grow` / `shrink` (final `scale` above 1.05 / below 0.95, where `scale` is the last reported while armed) and prints the final scale; test the verdict function in `test_trace.c`'s style with synthetic traces from `gen_traces.py` (pinch-ready fixture with the gap ramped; added to `traces/manifest.txt`).
 - [ ] **Step 2:** With the owner at the camera: `make run`; resize a real window; then a guided recording adding `real_pinch_grow`, `real_pinch_shrink` to `app/record_scripted.sh` plus the existing five negatives (which must now also produce zero RESIZE arms). Analyse with `core/tools/sweep.py` (extend its report with resize arms and final scale).
 - [ ] **Step 3:** README (behaviour, pose table, tuning table, Accessibility permission instructions, reading order gains `gestures/`, `window_*`), spec "Findings" section, project memory.
 - [ ] **Step 4:** Dispatch a read-only review agent over the iteration's diff with the same brief as the earlier reviews (forbid rebuilding the dylib / HUD if the app may be running); fix findings test-first; push the branch. Do not push `main`.
+
+**As built, Step 1 (2026-09-17):**
+- The rule is its own unit, `core/src/verdict.{h,c}` (`gv_expectation_parse`, `gv_verdict` over a `gv_replay_summary`), with `tests/test_verdict.c`: 29 checks, 13 mutants killed. It is stricter than the plan's one-liner: `up` / `down` also require that no window was touched, `grow` / `shrink` that the volume did not move, and `none` means no change of either kind even if the totals came back to where they started. The final scale is the last one a resize REPORTED, its rolled-back last word included, not "the last while armed".
+- The synthetic pinch traces come from a C tool, `core/tools/gen_pinch_traces.c` (`make -C core pinch-traces`), not `gen_traces.py`, so the pinch blend exists once (`tests/pinch_motion.h`). Four traces in the manifest: shrink (0.72), grow (1.55), then_fist (0.82, ends by closing the hand) and glimpse (none).
+- `sweep.py` no longer has its own copy of the rule: `verdict.c` is in the library and `bridge.verdict` asks it. Its report gains resize arms and the final scale.
+- Every Makefile target now depends on the Makefile: adding `verdict.c` to `LIB_SRC` did not relink the library, and the bridge test failed on a missing symbol.
+- Steps 2 - 4 are open. Step 2 needs the owner at the camera.
 
 ## Self-review notes
 

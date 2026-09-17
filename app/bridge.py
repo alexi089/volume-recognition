@@ -88,6 +88,12 @@ class Config(C.Structure):
     ]
 
 
+class ReplaySummary(C.Structure):
+    """gv_replay_summary (core/src/verdict.h): what a replay observed."""
+    _fields_ = [("volume_delta", C.c_float), ("volume_changes", C.c_int),
+                ("resize_changes", C.c_int), ("final_scale", C.c_float)]
+
+
 class StepResult(C.Structure):
     _fields_ = [("out", Output), ("vol", C.c_int), ("win", C.c_int)]
 
@@ -117,6 +123,10 @@ def _load() -> C.CDLL:
     lib.vol_strerror.argtypes = [C.c_int]
     lib.vol_device_name.restype = C.c_int
     lib.vol_device_name.argtypes = [C.c_char_p, C.c_size_t]
+    lib.gv_expectation_parse.restype = C.c_int
+    lib.gv_expectation_parse.argtypes = [C.c_char_p, C.POINTER(C.c_int)]
+    lib.gv_verdict.restype = C.c_int
+    lib.gv_verdict.argtypes = [C.c_int, C.POINTER(ReplaySummary)]
     lib.win_strerror.restype = C.c_char_p
     lib.win_strerror.argtypes = [C.c_int]
     lib.win_target_name.restype = C.c_int
@@ -150,6 +160,15 @@ def device_name() -> tuple[int, str]:
     buf = C.create_string_buffer(128)
     status = _lib.vol_device_name(buf, len(buf))
     return status, buf.value.decode(errors="replace")
+
+
+def verdict(expect: str, volume_delta: float, volume_changes: int, resize_changes: int, final_scale: float) -> bool:
+    """Did a replay meet its manifest expectation (up|down|grow|shrink|none)? The rule is C's."""
+    code = C.c_int()
+    if not _lib.gv_expectation_parse(expect.encode(), C.byref(code)):
+        raise ValueError(f"unknown expectation {expect!r}")
+    seen = ReplaySummary(volume_delta, volume_changes, resize_changes, final_scale)
+    return bool(_lib.gv_verdict(code, C.byref(seen)))
 
 
 def win_strerror(status: int) -> str:

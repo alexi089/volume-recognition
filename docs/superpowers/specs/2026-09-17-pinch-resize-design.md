@@ -193,6 +193,12 @@ Bad news first: the gesture is narrower than the approved design said.
   on those recordings are unchanged.
 - `gv_step` writes the volume only when the change is volume's; `changed`
   belongs to whichever gesture is armed.
+- **The scripted take now has two failing negatives, not one.** Replayed with
+  the resize-aware `sweep.py`: `real_nose_scratch` still arms the VOLUME slider
+  (known, unfixed), and `real_talking_hands` now arms the RESIZE once (0.3 s, two
+  changes, up to 1.02x, rolled back to 1.00). A window would have twitched by 2%
+  and returned. "Rolled back" is not "nothing happened": `none` means no change
+  of either kind, and that clip fails it. The other five clips pass.
 
 ### The window backend (`window_macos.c`, behind `window.h`)
 
