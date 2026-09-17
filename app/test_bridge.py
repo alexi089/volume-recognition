@@ -133,6 +133,9 @@ def main() -> int:
     status, name = bridge.win_target_name()
     check(status == -2 and name == "", "no window is held outside a resize")
 
+    status, size = bridge.win_current_size()
+    check(status == -2 and size == (0.0, 0.0), "no window frame outside a resize")
+
     # The replay verdict is C's (core/src/verdict.c); Python only asks it.
     check(bridge.verdict("shrink", 0.0, 0, 12, 0.7) and not bridge.verdict("grow", 0.0, 0, 12, 0.7),
           "the C verdict answers through the bridge")

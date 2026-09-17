@@ -89,6 +89,11 @@ class Config(C.Structure):
     ]
 
 
+class WinRect(C.Structure):
+    """win_rect (core/include/window.h): points, top-left origin."""
+    _fields_ = [("x", C.c_double), ("y", C.c_double), ("w", C.c_double), ("h", C.c_double)]
+
+
 class ReplaySummary(C.Structure):
     """gv_replay_summary (core/src/verdict.h): what a replay observed."""
     _fields_ = [("volume_delta", C.c_float), ("volume_changes", C.c_int),
@@ -130,6 +135,8 @@ def _load() -> C.CDLL:
     lib.gv_verdict.argtypes = [C.c_int, C.POINTER(ReplaySummary)]
     lib.win_strerror.restype = C.c_char_p
     lib.win_strerror.argtypes = [C.c_int]
+    lib.win_current_frame.restype = C.c_int
+    lib.win_current_frame.argtypes = [C.POINTER(WinRect)]
     lib.win_last_ax_error.restype = C.c_int
     lib.win_last_ax_error.argtypes = []
     lib.win_target_name.restype = C.c_int
@@ -176,6 +183,13 @@ def verdict(expect: str, volume_delta: float, volume_changes: int, resize_change
 
 def win_strerror(status: int) -> str:
     return _lib.win_strerror(status).decode()
+
+
+def win_current_size() -> tuple[int, tuple[float, float]]:
+    """(status, (width, height)) of the held window as last read back; (-2, (0, 0)) when none is held."""
+    r = WinRect()
+    status = _lib.win_current_frame(C.byref(r))
+    return status, ((r.w, r.h) if status == WIN_OK else (0.0, 0.0))
 
 
 def win_last_ax_error() -> int:

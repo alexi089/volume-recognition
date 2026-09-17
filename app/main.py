@@ -194,7 +194,8 @@ class Recorder:
         self._file.write(f"t_sec,present,{cols},hand\n")
         self._events_path = trace.with_suffix(".events.csv")  # created on the first event
 
-    def write(self, t_sec: float, landmarks, step=None, handedness: int = 0, target: str = "") -> None:
+    def write(self, t_sec: float, landmarks, step=None, handedness: int = 0, target: str = "",
+              size: tuple[float, float] = (0.0, 0.0)) -> None:
         if self._file is None:
             return
         if landmarks:
@@ -207,7 +208,7 @@ class Recorder:
                 self._events = open(self._events_path, "w")
                 # New columns go on the END: older events files stay readable by position.
                 self._events.write("t_sec,state,axis,target_volume,changed,vol_status,vol_status_text,"
-                                   "kind,scale,win_status,win_ax_error,win_target\n")
+                                   "kind,scale,win_status,win_ax_error,win_target,win_w,win_h\n")
             self._events.write(
                 f"{t_sec:.6f},{bridge.STATE_NAMES[step.out.state]},{bridge.AXIS_NAMES[step.out.axis] or '-'},"
                 f"{step.out.volume:.4f},"
@@ -216,7 +217,10 @@ class Recorder:
                 # The first live try failed on every resize and this file could not say
                 # why: it had the status but neither the raw error nor the app.
                 f"{bridge.win_last_ax_error() if step.win == bridge.WIN_ERR_AX else 0},"
-                f"{target.replace(',', ' ') or '-'}\n"
+                f"{target.replace(',', ' ') or '-'},"
+                # the size as read back: "stopped shrinking" is only an app's minimum
+                # size if the recording can show the size it stopped at
+                f"{size[0]:.0f},{size[1]:.0f}\n"
             )
 
     def close(self) -> None:
@@ -385,7 +389,8 @@ def main() -> None:
                     # Whose window a resize holds; empty outside a resize.
                     target = bridge.win_target_name()[1] if step.out.kind == bridge.KIND_RESIZE else ""
                     problem = latch.update(describe_problem(step, target), now)
-                    recorder.write(t_sec, landmarks, step, handedness, target)
+                    size = bridge.win_current_size()[1] if target else (0.0, 0.0)
+                    recorder.write(t_sec, landmarks, step, handedness, target, size)
                     hud.send(step.out, problem[1] if problem else None)
 
                 dt = now - last_frame_t

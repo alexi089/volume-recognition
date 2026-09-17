@@ -51,6 +51,24 @@ win_rect win_below_menu_bar(win_rect display, win_rect bar);
 #define WIN_CANDIDATE_MIN 100.0
 int win_is_candidate(int layer, int is_own, win_rect bounds);
 
+/*
+ * After a write, the size is read back. Was the write IGNORED?
+ *
+ *   before     the size before this write
+ *   want       the size asked for
+ *   after      the size read back
+ *   responded  1 if any earlier write since win_acquire changed the window
+ *
+ * Ignored means: a change was asked for, nothing changed, and this window has
+ * never yet responded. A window that HAS responded and now stays put is at a
+ * limit of its own (the first live try pinned a browser window at its minimum
+ * size and every further pinch raised a false alarm); that is not an error.
+ * Sizes within WIN_SIZE_TOLERANCE points count as equal.
+ */
+#define WIN_SIZE_TOLERANCE 2.0
+int win_sizes_differ(win_rect a, win_rect b);
+int win_write_was_ignored(win_rect before, win_rect want, win_rect after, int responded);
+
 /* --- the part that talks to macOS (window_macos.c) ----------------------- */
 
 /* The smallest a gesture may make a window. Apps enforce their own minimums on

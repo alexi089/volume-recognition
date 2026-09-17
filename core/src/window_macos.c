@@ -32,13 +32,11 @@
  * a late resize is worth less than a frozen camera. */
 #define AX_TIMEOUT_SEC 0.25f
 
-/* Reading the size back: within this many points counts as "what was asked". */
-#define SIZE_TOLERANCE_PT 2.0
-
 static AXUIElementRef g_window;          /* the held window, or NULL; owned (retained) */
 static win_rect       g_original;        /* its frame at win_acquire */
 static win_rect       g_current;         /* its frame as last read */
 static win_rect       g_visible;         /* the visible frame of its screen */
+static int            g_responded;       /* has any write since win_acquire changed the window? */
 static char           g_owner_name[128];
 static AXError        g_last_ax_error = kAXErrorSuccess;
 
@@ -215,6 +213,7 @@ win_status win_acquire(void)
         goto done;
 
     g_current = g_original;
+    g_responded = 0;
     CGPoint centre = { g_original.x + g_original.w / 2.0, g_original.y + g_original.h / 2.0 };
     g_visible = visible_frame_at(centre, list);
     g_window = (AXUIElementRef)window; /* keep it: ownership moves to g_window */
@@ -255,14 +254,14 @@ win_status win_apply(float scale)
         return status;
 
     /* Not what was asked is normal: apps have minimum sizes, terminals snap to
-     * whole characters, video windows keep their shape. Not having moved AT ALL
-     * when a change was asked for is the failure worth reporting. */
-    const int asked_for_a_change = fabs(want.w - before.w) > SIZE_TOLERANCE_PT ||
-                                   fabs(want.h - before.h) > SIZE_TOLERANCE_PT;
-    const int nothing_changed = fabs(g_current.w - before.w) <= SIZE_TOLERANCE_PT &&
-                                fabs(g_current.h - before.h) <= SIZE_TOLERANCE_PT;
-    if (asked_for_a_change && nothing_changed)
+     * whole characters, video windows keep their shape. A window that never
+     * moves AT ALL is the failure worth reporting; one that moved earlier and
+     * now stays put has reached a limit of its own. The rule is
+     * win_write_was_ignored (window_math.c), where it is tested. */
+    if (win_write_was_ignored(before, want, g_current, g_responded))
         return WIN_ERR_IGNORED;
+    if (win_sizes_differ(g_current, before))
+        g_responded = 1;
     return WIN_OK;
 }
 
@@ -305,7 +304,7 @@ const char *win_strerror(win_status s)
                                        "(Terminal, VS Code, ...) under System Settings > Privacy & Security > Accessibility";
     case WIN_ERR_NO_WINDOW:     return "no window to resize";
     case WIN_ERR_NOT_RESIZABLE: return "the front window has a fixed size";
-    case WIN_ERR_IGNORED:       return "the window reported success but did not change size";
+    case WIN_ERR_IGNORED:       return "the window accepted a new size and did not change (at its limit, or it ignores resizing)";
     case WIN_ERR_AX:            return "an Accessibility call failed";
     case WIN_ERR_BAD_VALUE:     return "bad value";
     }

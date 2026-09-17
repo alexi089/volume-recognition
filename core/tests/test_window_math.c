@@ -233,6 +233,50 @@ static void only_ordinary_windows_of_a_usable_size_are_targets(void)
     CHECK(win_is_candidate(0, 0, small));
 }
 
+static win_rect sized(double w, double h)
+{
+    win_rect r = { 100.0, 100.0, w, h };
+    return r;
+}
+
+static void sizes_within_two_points_are_the_same_size(void)
+{
+    CHECK(!win_sizes_differ(sized(800, 600), sized(800, 600)));
+    CHECK(!win_sizes_differ(sized(800, 600), sized(802, 598)));
+    CHECK(win_sizes_differ(sized(800, 600), sized(803, 600)));
+    CHECK(win_sizes_differ(sized(800, 600), sized(800, 597)));
+    win_rect moved = { 900.0, -50.0, 800.0, 600.0 };
+    CHECK(!win_sizes_differ(sized(800, 600), moved)); /* position is not size */
+}
+
+static void a_write_that_changes_nothing_on_a_window_that_never_responded_was_ignored(void)
+{
+    CHECK(win_write_was_ignored(sized(800, 600), sized(720, 540), sized(800, 600), 0));
+    CHECK(win_write_was_ignored(sized(800, 600), sized(720, 540), sized(801, 600), 0)); /* a point of noise is no response */
+}
+
+static void a_write_that_took_was_not_ignored(void)
+{
+    CHECK(!win_write_was_ignored(sized(800, 600), sized(720, 540), sized(720, 540), 0));
+    /* settled somewhere else than asked (a terminal snapping to characters): it moved, that is enough */
+    CHECK(!win_write_was_ignored(sized(800, 600), sized(720, 540), sized(714, 533), 0));
+    /* only one side could move: still a response */
+    CHECK(!win_write_was_ignored(sized(800, 600), sized(720, 540), sized(800, 540), 0));
+}
+
+/* The first live try: a browser window shrank to its own minimum, and every
+ * further pinch then "changed nothing". It had responded before, so that is a
+ * limit, not a fault. */
+static void a_window_at_its_own_limit_is_not_an_error(void)
+{
+    CHECK(!win_write_was_ignored(sized(1522, 985), sized(1490, 960), sized(1522, 985), 1));
+}
+
+static void asking_for_no_change_is_never_ignored(void)
+{
+    CHECK(!win_write_was_ignored(sized(800, 600), sized(801, 601), sized(800, 600), 0));
+}
+
 int main(void)
 {
     fprintf(stderr, "test_window_math\n");
@@ -254,5 +298,10 @@ int main(void)
     RUN(a_rectangle_that_is_not_a_bar_along_the_top_is_ignored);
     RUN(the_camera_indicators_and_our_own_preview_are_not_targets);
     RUN(only_ordinary_windows_of_a_usable_size_are_targets);
+    RUN(sizes_within_two_points_are_the_same_size);
+    RUN(a_write_that_changes_nothing_on_a_window_that_never_responded_was_ignored);
+    RUN(a_write_that_took_was_not_ignored);
+    RUN(a_window_at_its_own_limit_is_not_an_error);
+    RUN(asking_for_no_change_is_never_ignored);
     return TEST_SUMMARY();
 }

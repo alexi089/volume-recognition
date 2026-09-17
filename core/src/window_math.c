@@ -12,6 +12,18 @@ static double clamp(double v, double lo, double hi)
     return fmin(fmax(v, lo), hi);
 }
 
+int win_sizes_differ(win_rect a, win_rect b)
+{
+    return fabs(a.w - b.w) > WIN_SIZE_TOLERANCE || fabs(a.h - b.h) > WIN_SIZE_TOLERANCE;
+}
+
+int win_write_was_ignored(win_rect before, win_rect want, win_rect after, int responded)
+{
+    int asked_for_a_change = win_sizes_differ(want, before);
+    int nothing_changed = !win_sizes_differ(after, before);
+    return asked_for_a_change && nothing_changed && !responded;
+}
+
 int win_is_candidate(int layer, int is_own, win_rect bounds)
 {
     return layer == 0 && !is_own &&
