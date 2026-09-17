@@ -120,19 +120,30 @@ class Hud:
 
 
 class Recorder:
-    """Writes every frame's landmarks to CSV for core/tests/replay.c."""
+    """Writes two files per session:
+
+    <name>.csv         what the camera saw: every frame's landmarks, the input
+                       format of core/tools/replay.c.
+    <name>.events.csv  what the app did with it: state, target volume and the
+                       status of that frame's volume call. The first live
+                       session could not answer "did the writes fail, or were
+                       they never made?" because only the first file existed.
+    """
 
     def __init__(self, path: str | None, aspect: float):
-        self._file = None
+        self._file = self._events = None
         if path is None:
             return
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self._file = open(path, "w")
+        trace = Path(path)
+        trace.parent.mkdir(parents=True, exist_ok=True)
+        self._file = open(trace, "w")
         self._file.write(f"# aspect={aspect:.6f}\n")
         cols = ",".join(f"x{i},y{i},z{i}" for i in range(bridge.NUM_LANDMARKS))
         self._file.write(f"t_sec,present,{cols}\n")
+        self._events = open(trace.with_suffix(".events.csv"), "w")
+        self._events.write("t_sec,state,target_volume,changed,vol_status,vol_status_text\n")
 
-    def write(self, t_sec: float, landmarks) -> None:
+    def write(self, t_sec: float, landmarks, step=None) -> None:
         if self._file is None:
             return
         if landmarks:
@@ -140,11 +151,17 @@ class Recorder:
         else:
             values = ",".join(["0"] * (3 * bridge.NUM_LANDMARKS))
         self._file.write(f"{t_sec:.6f},{1 if landmarks else 0},{values}\n")
+        if step is not None:
+            self._events.write(
+                f"{t_sec:.6f},{bridge.STATE_NAMES[step.out.state]},{step.out.volume:.4f},"
+                f"{step.out.changed},{step.vol},{bridge.strerror(step.vol)}\n"
+            )
 
     def close(self) -> None:
-        if self._file is not None:
-            self._file.close()
-            self._file = None
+        for f in (self._file, self._events):
+            if f is not None:
+                f.close()
+        self._file = self._events = None
 
 
 def draw_overlay(frame, landmarks, state: int, volume: float, error: str | None, fps: float) -> None:
@@ -166,7 +183,29 @@ def draw_overlay(frame, landmarks, state: int, volume: float, error: str | None,
     cv2.putText(frame, f"{round(volume * 100)}%", (x0, y0 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
     if error:
-        cv2.putText(frame, error, (12, 62), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (60, 60, 255), 2)
+        # A failed volume write means the whole app is doing nothing useful, so
+        # it gets a banner across the frame rather than a line in the corner.
+        cv2.rectangle(frame, (0, 44), (w, 44 + 56), (40, 40, 200), -1)
+        cv2.putText(frame, "VOLUME NOT CHANGING", (12, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.putText(frame, error, (12, 92), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+
+
+class ErrorLatch:
+    """Keeps the last error on screen for a moment. Volume status only appears
+    on the frames that actually wrote, so without this the banner would blink
+    on and off at frame rate. Display persistence only; nothing here decides
+    anything about the gesture."""
+
+    HOLD_SEC = 2.0
+
+    def __init__(self):
+        self._text = None
+        self._until = 0.0
+
+    def update(self, error: str | None, now: float) -> str | None:
+        if error:
+            self._text, self._until = error, now + self.HOLD_SEC
+        return self._text if now < self._until else None
 
 
 def describe_error(status: int) -> str | None:
@@ -196,6 +235,7 @@ def main() -> None:
         recorder = Recorder(args.record, aspect)
         start = time.monotonic()
         last_ts_ms, fps, last_frame_t = -1, 0.0, start
+        latch = ErrorLatch()
 
         with make_landmarker() as landmarker, bridge.Gesture(aspect) as gesture:
             while True:
@@ -218,9 +258,9 @@ def main() -> None:
 
                 t_sec = now - start
                 step = gesture.step(landmarks, t_sec)
-                error = describe_error(step.vol)
+                error = latch.update(describe_error(step.vol), now)
 
-                recorder.write(t_sec, landmarks)
+                recorder.write(t_sec, landmarks, step)
                 hud.send(step.out.state, step.out.volume, error)
 
                 dt = now - last_frame_t

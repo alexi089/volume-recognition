@@ -117,6 +117,38 @@ int vol_set(float v);
   through `gv_step_system` moved the system volume 0.50 -> 0.64, confirmed
   independently through AppleScript.
 
+## Findings from the first live session (2026-09-17)
+
+7.5 minutes, 9,556 frames, recorded to `traces/real_first_session.csv`.
+
+- **The real volume never moved.** The AirPods sat at 0.50 before and after.
+  Controlled experiments on the AirPods in that state, each restoring the
+  volume afterwards:
+  - app not running, no audio: virtual main volume write returns `noErr`,
+    read-back unchanged. So the camera app is not the cause.
+  - 7 s of silence streaming, `DeviceIsRunningSomewhere` = 1 throughout, a
+    write every 0.5 s: all ignored. So "no active stream" is not the cause.
+    (An earlier version of this test waited only 1.5 s and proved nothing.)
+  - per-channel `kAudioDevicePropertyVolumeScalar` on elements 1 and 2:
+    `noErr`, unchanged. There is no alternative software write path.
+  - AppleScript `set volume`: ignored as well.
+  The same code moved the same AirPods 0.50 -> 0.64 an hour earlier. The
+  distinguishing condition is not yet known; in-ear detection is the leading
+  guess and is unverified. Outcome in code: a full-width red banner, and a
+  per-frame `<name>.events.csv` beside every recording with the volume status.
+- **The slider kept letting go.** 69 armed sessions, median 0.9 s, 40 under 1 s.
+  58 of 69 ended on pose flicker (40 ring/pinky read as extended, 18
+  index/middle read as curled), 11 on the hand leaving. The 1.15 threshold came
+  from photos of tight fists (curled = 0.29 - 0.70); a relaxed real hand's
+  curled ring/pinky read 0.74 median and up to 1.17, a continuum.
+- **Glitch frames.** 1.9% of armed frames had a hand size below 0.6x or above
+  1.6x of normal; one moved the volume 0.57 in a single frame.
+- **Too sensitive.** Full range was about a third of the frame width.
+- **21 fps** with the 1080p preview against 27 fps headless; MediaPipe itself
+  takes 7.6 ms per frame.
+- Landmark jitter is small: the stillest second while armed had a palm-x
+  standard deviation worth 0.39% of volume, unfiltered.
+
 ## Changes from the plan
 
 - `vol_*` lives in its own `volume.h` rather than in `gesture.h`, keeping the
