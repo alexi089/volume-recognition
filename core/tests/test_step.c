@@ -146,13 +146,6 @@ static void an_output_without_volume_control_is_reported_while_idle(void)
     gv_destroy(ctx);
 }
 
-static void abi_sizes_match_the_structs(void)
-{
-    CHECK(gv_abi_frame_size() == sizeof(gv_frame));
-    CHECK(gv_abi_config_size() == sizeof(gv_config));
-    CHECK(gv_abi_step_result_size() == sizeof(gv_step_result));
-}
-
 int main(void)
 {
     fprintf(stderr, "test_step\n");
@@ -161,6 +154,5 @@ int main(void)
     RUN(a_volume_change_made_elsewhere_is_picked_up_while_idle);
     RUN(the_status_of_a_failing_write_is_on_that_frames_result);
     RUN(an_output_without_volume_control_is_reported_while_idle);
-    RUN(abi_sizes_match_the_structs);
     return TEST_SUMMARY();
 }

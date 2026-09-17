@@ -72,6 +72,23 @@ static void non_numeric_field_is_malformed(void)
     CHECK(gv_trace_parse_line(row("1.0", "yes", 63), &f) == GV_TRACE_MALFORMED);
 }
 
+/* strtod happily parses "nan", "inf" and "1e999"; a trace must not be able to
+ * smuggle those into the core. */
+static void non_finite_values_are_malformed(void)
+{
+    gv_frame f;
+    CHECK(gv_trace_parse_line(row("nan", "1", 63), &f) == GV_TRACE_MALFORMED);
+    CHECK(gv_trace_parse_line(row("inf", "1", 63), &f) == GV_TRACE_MALFORMED);
+    CHECK(gv_trace_parse_line(row("1e999", "1", 63), &f) == GV_TRACE_MALFORMED);
+
+    char line[2048];
+    snprintf(line, sizeof line, "%s", row("1.0", "1", 63));
+    char *p = strstr(line, ",30.5,");
+    CHECK(p != NULL);
+    memcpy(p, ",nan ,", 6);
+    CHECK(gv_trace_parse_line(line, &f) == GV_TRACE_MALFORMED);
+}
+
 static void aspect_comment_is_read(void)
 {
     float a = 0.0f;
@@ -93,6 +110,7 @@ int main(void)
     RUN(comments_header_and_blank_lines_are_skipped);
     RUN(wrong_field_count_is_malformed);
     RUN(non_numeric_field_is_malformed);
+    RUN(non_finite_values_are_malformed);
     RUN(aspect_comment_is_read);
     return TEST_SUMMARY();
 }

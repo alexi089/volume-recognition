@@ -37,8 +37,11 @@ gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_volume_ops *
 gv_step_result gv_step_system(gv_ctx *ctx, const gv_frame *frame);
 
 /* sizeof the structs that cross the FFI boundary. The Python side compares
- * these with its own ctypes definitions at load time, because a layout
- * mismatch between the two otherwise shows up as silently corrupted values. */
+ * these with its own ctypes definitions at load time (bridge.py, _check_abi),
+ * because a layout mismatch between the two otherwise shows up as silently
+ * corrupted values. That is the only place the comparison means anything: a C
+ * test comparing these to sizeof would be the same compiler agreeing with
+ * itself. */
 unsigned gv_abi_frame_size(void);
 unsigned gv_abi_config_size(void);
 unsigned gv_abi_step_result_size(void);

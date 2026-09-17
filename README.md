@@ -50,7 +50,7 @@ camera -> [Python] mirror -> MediaPipe -> 21 landmarks + timestamp
 ```
 
 Python is a pipe; it holds no gesture logic. Everything that decides anything
-is in `core/` and is plain C11 with no dependencies beyond CoreAudio.
+is in `core/` and is plain C11 with no dependencies beyond libm and CoreAudio.
 
 - **Pose.** A finger is extended when its tip is more than 1.15x as far from
   the wrist as its middle joint. Measured on real hands: extended fingers give

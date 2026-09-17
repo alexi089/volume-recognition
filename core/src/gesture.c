@@ -63,14 +63,35 @@ gv_config gv_default_config(void)
     return cfg;
 }
 
+/* The config arrives from outside (ctypes, in practice), so it is checked
+ * once here rather than trusted everywhere else. `x > 0` is false for NaN, so
+ * those comparisons reject NaN for free; the fields that may be zero or
+ * negative need the explicit isfinite. */
+static int config_is_valid(const gv_config *c)
+{
+    return c->aspect > 0.0f && isfinite(c->aspect) &&
+           c->finger_ratio > 0.0f && isfinite(c->finger_ratio) &&
+           c->arm_hold_sec >= 0.0f && isfinite(c->arm_hold_sec) &&
+           c->release_grace_sec >= 0.0f && isfinite(c->release_grace_sec) &&
+           isfinite(c->gain) && /* negative is allowed: it reverses the slider */
+           c->dead_band >= 0.0f && isfinite(c->dead_band) &&
+           c->filter_min_cutoff > 0.0f && isfinite(c->filter_min_cutoff) &&
+           c->filter_beta >= 0.0f && isfinite(c->filter_beta) &&
+           c->filter_d_cutoff > 0.0f && isfinite(c->filter_d_cutoff);
+}
+
 gv_ctx *gv_create(const gv_config *cfg)
 {
+    gv_config chosen = cfg ? *cfg : gv_default_config();
+    if (!config_is_valid(&chosen))
+        return NULL;
+
     /* calloc zero-fills, so every field not set below starts as 0 / GV_IDLE. */
     gv_ctx *ctx = calloc(1, sizeof *ctx);
     if (ctx == NULL)
         return NULL;
 
-    ctx->cfg = cfg ? *cfg : gv_default_config();
+    ctx->cfg = chosen;
     gv_filter_init(&ctx->x_filter, ctx->cfg.filter_min_cutoff, ctx->cfg.filter_beta,
                    ctx->cfg.filter_d_cutoff);
     return ctx;
@@ -127,6 +148,14 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
     const gv_config *cfg = &ctx->cfg;
     const double t = frame->t_sec;
     int changed = 0;
+
+    /* Every decision below compares times. A frame without a usable timestamp
+     * cannot be placed in the sequence at all, so it is dropped whole: state
+     * and volume are reported as they were. */
+    if (!isfinite(t)) {
+        gv_output unchanged = { ctx->state, ctx->reported_volume, 0 };
+        return unchanged;
+    }
 
     const int has_pose = frame_is_usable(frame) &&
                          gv_pose_is_two_fingers(frame, cfg->aspect, cfg->finger_ratio);

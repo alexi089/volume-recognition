@@ -12,6 +12,7 @@ Quit with q or Esc in the preview window, or Ctrl-C.
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -26,6 +27,7 @@ import bridge
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = ROOT / "app" / "models" / "hand_landmarker.task"
 HUD_PATH = ROOT / "hud" / "build" / "volume-hud"
+HUD_STALL_SEC = 2.0
 CONNECTIONS = [(c.start, c.end) for c in vision.HandLandmarksConnections.HAND_CONNECTIONS]
 STATE_COLOURS = {bridge.IDLE: (160, 160, 160), bridge.ARMING: (0, 200, 255), bridge.ARMED: (80, 220, 80)}
 
@@ -71,19 +73,35 @@ class Hud:
         if not HUD_PATH.exists():
             print(f"HUD not built ({HUD_PATH.relative_to(ROOT)}); run `make -C hud`. Continuing without it.")
             return
-        self._proc = subprocess.Popen([str(HUD_PATH)], stdin=subprocess.PIPE, text=True)
+        self._proc = subprocess.Popen([str(HUD_PATH)], stdin=subprocess.PIPE)
+        # Non-blocking: a HUD that is alive but has stopped reading would
+        # otherwise fill the 64 KB pipe and then block write() forever, freezing
+        # the camera loop with it. Each line is far below PIPE_BUF (512 bytes),
+        # so a write either goes through whole or raises BlockingIOError; it can
+        # never leave half a JSON line in the pipe.
+        self._fd = self._proc.stdin.fileno()
+        os.set_blocking(self._fd, False)
+        self._blocked_since = None
 
     def send(self, state: int, volume: float, error: str | None) -> None:
         if self._proc is None:
             return
+        line = json.dumps({"state": bridge.STATE_NAMES[state], "volume": round(volume, 4), "error": error}) + "\n"
         try:
-            self._proc.stdin.write(
-                json.dumps({"state": bridge.STATE_NAMES[state], "volume": round(volume, 4), "error": error}) + "\n"
-            )
-            self._proc.stdin.flush()
-        except (BrokenPipeError, OSError):
+            os.write(self._fd, line.encode())
+            self._blocked_since = None
+        except BlockingIOError:
+            # The HUD is not keeping up. Drop this frame's line (the next one
+            # supersedes it anyway) and give up if it stays stuck.
+            now = time.monotonic()
+            if self._blocked_since is None:
+                self._blocked_since = now
+            elif now - self._blocked_since > HUD_STALL_SEC:
+                print(f"HUD stopped reading for {HUD_STALL_SEC:.0f} s; continuing without it.")
+                self._terminate()
+        except OSError:  # includes BrokenPipeError: the HUD exited
             print("HUD process exited; continuing without it.")
-            self._proc = None
+            self._terminate()
 
     def close(self) -> None:
         if self._proc is None:
@@ -91,8 +109,13 @@ class Hud:
         try:
             self._proc.stdin.close()  # EOF is the HUD's signal to quit
             self._proc.wait(timeout=2)
+            self._proc = None
         except (OSError, subprocess.TimeoutExpired):
-            self._proc.kill()
+            self._terminate()
+
+    def _terminate(self) -> None:
+        self._proc.kill()
+        self._proc.wait()  # reap it; a killed child is a zombie until waited for
         self._proc = None
 
 
@@ -158,7 +181,7 @@ def main() -> None:
     parser.add_argument("--camera", type=int, default=0, help="camera index (default 0)")
     parser.add_argument("--record", metavar="CSV", help="also write landmarks to this file")
     parser.add_argument("--no-hud", action="store_true", help="do not launch the native HUD")
-    parser.add_argument("--no-preview", action="store_true", help="do not show the camera preview window")
+    parser.add_argument("--no-preview", action="store_true", help="do not show the camera preview window (quit with Ctrl-C)")
     args = parser.parse_args()
 
     cap = open_camera(args.camera)

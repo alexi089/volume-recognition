@@ -34,6 +34,10 @@ gv_trace_result gv_trace_parse_line(const char *line, gv_frame *out)
         values[i] = strtod(p, &end);
         if (end == p)
             return GV_TRACE_MALFORMED; /* no number here */
+        /* strtod also accepts "nan", "inf", and overflows "1e999" to infinity.
+         * None of those is a coordinate or a time. */
+        if (!isfinite(values[i]))
+            return GV_TRACE_MALFORMED;
         p = skip_space(end);
 
         int last = (i == FIELDS_PER_ROW - 1);

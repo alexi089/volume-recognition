@@ -27,8 +27,7 @@ the logic is a good C exercise and because CoreAudio is a C API.
 
 ```
 camera frame -> [Python] flip to selfie view -> MediaPipe -> 21 landmarks + timestamp
-             -> [C] gv_update(frame) -> { state, target_volume, changed }
-             -> [C] vol_set(target_volume)      (only when changed)
+             -> [C] gv_step_system(frame): vol_get -> gv_update -> vol_set if changed
              -> [Python] draw overlay: landmarks, state, volume bar
 ```
 
@@ -147,7 +146,7 @@ int vol_set(float v);
 - C unit tests (plain C, no framework) for filter, pose, and state machine,
   built with `-Wall -Wextra -Werror -fsanitize=address,undefined`.
 - Trace replay: `main.py --record` writes landmark sessions to CSV;
-  `tests/replay.c` feeds them to `gv_update`. Negative traces (nose scratch,
+  `tools/replay.c` feeds them to `gv_update`. Negative traces (nose scratch,
   reaching for a cup, typing, waving) must produce zero volume change; positive
   traces must move the volume in the right direction.
 - Still-image fixtures in `traces/fixtures/` (MediaPipe's published

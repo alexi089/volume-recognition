@@ -75,7 +75,9 @@ gv_config gv_default_config(void);
  */
 typedef struct gv_ctx gv_ctx;
 
-/* cfg may be NULL for the defaults. Returns NULL if memory cannot be allocated. */
+/* cfg may be NULL for the defaults. Returns NULL if the config is invalid (a
+ * non-finite field, or a non-positive aspect, finger_ratio or filter cutoff,
+ * or a negative time or dead-band) or if memory cannot be allocated. */
 gv_ctx *gv_create(const gv_config *cfg);
 
 /* Safe to call with NULL, like free(). */

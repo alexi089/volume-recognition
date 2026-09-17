@@ -96,6 +96,29 @@ static void null_config_gives_working_defaults(void)
     gv_destroy(NULL); /* must be a no-op, like free(NULL) */
 }
 
+static void nonsense_config_is_rejected(void)
+{
+    gv_config c;
+
+    c = gv_default_config(); c.aspect = 0.0f;              CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.aspect = NAN;               CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.finger_ratio = -1.0f;       CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.arm_hold_sec = NAN;         CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.arm_hold_sec = -0.1f;       CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.release_grace_sec = -1.0f;  CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.gain = INFINITY;            CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.dead_band = -0.01f;         CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.filter_min_cutoff = 0.0f;   CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.filter_d_cutoff = 0.0f;     CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.filter_beta = -1.0f;        CHECK(gv_create(&c) == NULL);
+
+    /* a negative gain is legitimate: it reverses the slider's direction */
+    c = gv_default_config(); c.gain = -c.gain;
+    gv_ctx *ctx = gv_create(&c);
+    CHECK(ctx != NULL);
+    gv_destroy(ctx);
+}
+
 /* --- arming ------------------------------------------------------------- */
 
 static void no_hand_stays_idle(void)
@@ -172,6 +195,27 @@ static void volume_is_clamped_to_its_range(void)
     slide(&s, &fixture_victory, 2.0f, -4.0f, 1.0);
     hold(&s, &fixture_victory, -4.0f, 0.3);
     CHECK_NEAR(s.out.volume, 0.0f, 1e-6);
+    finish(&s);
+}
+
+/* The last step to an end of the range can be smaller than the dead-band. It
+ * must still be reported, or the slider can never reach silence or full. */
+static void a_small_final_step_still_reaches_the_end_of_the_range(void)
+{
+    session s = start(0.50f);
+    arm(&s, &fixture_victory, 0.0f);
+    /* 1.485 hand-lengths * 1/3 = +0.495: parks the volume just short of 1.0 */
+    slide(&s, &fixture_victory, 0.0f, 1.485f, 0.6);
+    hold(&s, &fixture_victory, 1.485f, 0.6);
+    CHECK(s.out.volume > 0.98f && s.out.volume < 1.0f);
+
+    slide(&s, &fixture_victory, 1.485f, 1.6f, 0.2); /* target clamps to 1.0 */
+    hold(&s, &fixture_victory, 1.6f, 0.5);
+    CHECK(s.out.volume == 1.0f);
+
+    int before = s.changes;
+    hold(&s, &fixture_victory, 1.6f, 0.5); /* parked at the end: no repeats */
+    CHECK(s.changes == before);
     finish(&s);
 }
 
@@ -299,10 +343,33 @@ static void garbage_landmarks_are_treated_as_no_hand(void)
     finish(&s);
 }
 
+static void a_frame_with_a_non_finite_timestamp_is_ignored(void)
+{
+    session s = start(0.50f);
+    arm(&s, &fixture_victory, 0.0f);
+    CHECK(s.out.state == GV_ARMED);
+
+    gv_frame bad = fixture_victory;
+    bad.t_sec = NAN;
+    gv_output o = gv_update(s.ctx, &bad);
+    CHECK(o.state == GV_ARMED && o.changed == 0);
+    bad.t_sec = INFINITY;
+    o = gv_update(s.ctx, &bad);
+    CHECK(o.state == GV_ARMED && o.changed == 0);
+
+    /* and the session carries on as if they had never arrived */
+    slide(&s, &fixture_victory, 0.0f, 0.9f, 0.5);
+    hold(&s, &fixture_victory, 0.9f, 0.5);
+    CHECK(s.out.state == GV_ARMED);
+    CHECK_NEAR(s.out.volume, 0.80f, 0.02);
+    finish(&s);
+}
+
 int main(void)
 {
     fprintf(stderr, "test_gesture\n");
     RUN(null_config_gives_working_defaults);
+    RUN(nonsense_config_is_rejected);
     RUN(no_hand_stays_idle);
     RUN(pose_must_be_held_before_arming);
     RUN(a_passing_glimpse_of_the_pose_does_not_arm);
@@ -310,6 +377,7 @@ int main(void)
     RUN(sliding_right_raises_the_volume);
     RUN(sliding_left_lowers_the_volume);
     RUN(volume_is_clamped_to_its_range);
+    RUN(a_small_final_step_still_reaches_the_end_of_the_range);
     RUN(travel_is_measured_in_hand_lengths_not_pixels);
     RUN(movement_inside_the_dead_band_is_not_reported);
     RUN(dropping_the_pose_releases_and_keeps_the_volume);
@@ -319,5 +387,6 @@ int main(void)
     RUN(external_volume_updates_are_ignored_while_armed);
     RUN(other_hand_shapes_moving_across_the_frame_do_nothing);
     RUN(garbage_landmarks_are_treated_as_no_hand);
+    RUN(a_frame_with_a_non_finite_timestamp_is_ignored);
     return TEST_SUMMARY();
 }
