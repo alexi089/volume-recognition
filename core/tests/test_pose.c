@@ -57,7 +57,12 @@ static gv_frame with_finger_folded(const gv_frame *src, int mcp)
 
 /* --- tests -------------------------------------------------------------- */
 
-static const gv_pose_limits LIM = { 1.20f, 0.93f, 1.00f, 0.75f };
+static const gv_pose_limits LIM = {
+    .extend_reach = 1.20f, .extend_straight = 0.93f, .curl_reach = 1.00f, .curl_straight = 0.75f,
+    .thumb_extend_reach = 1.05f, .thumb_extend_straight = 0.67f,
+    .thumb_curl_reach = 0.55f, .thumb_curl_straight = 0.45f,
+    .pinch_gap_min = 0.73f,
+};
 #define REAL FIXTURE_REAL_ASPECT
 
 static void posed_photo_fingers_are_judged_correctly(void)
@@ -204,6 +209,125 @@ static gv_frame mirrored(const gv_frame *src)
     return out;
 }
 
+/* --- the thumb, and the resize poses ------------------------------------ */
+
+static void the_thumb_reads_out_when_out_and_in_when_tucked(void)
+{
+    CHECK_NEAR(gv_thumb_reach(&fixture_real_pinch_open, REAL), 1.81f, 0.10);
+    CHECK_NEAR(gv_thumb_straightness(&fixture_real_pinch_open, REAL), 0.97f, 0.03);
+    CHECK(gv_thumb_is_out(&fixture_real_pinch_open, REAL, &LIM));
+    CHECK(!gv_thumb_is_in(&fixture_real_pinch_open, REAL, &LIM));
+
+    CHECK(gv_thumb_reach(&fixture_real_pointing_thumb_in, REAL) < 0.55f);
+    CHECK(gv_thumb_is_in(&fixture_real_pointing_thumb_in, REAL, &LIM));
+    CHECK(!gv_thumb_is_out(&fixture_real_pointing_thumb_in, REAL, &LIM));
+
+    /* fully pinched, the thumb is still out: that is what the stay pose rests on */
+    CHECK(gv_thumb_is_out(&fixture_real_pinch_closed, REAL, &LIM));
+}
+
+static void the_pinch_ready_hand_can_arm_a_resize(void)
+{
+    CHECK(gv_pose_can_arm_resize(&fixture_real_pinch_open, REAL, &LIM));
+}
+
+static void other_hand_shapes_cannot_arm_a_resize(void)
+{
+    CHECK(!gv_pose_can_arm_resize(&fixture_real_pointing_thumb_in, REAL, &LIM)); /* thumb in */
+    CHECK(!gv_pose_can_arm_resize(&fixture_real_tight_two, REAL, &LIM));         /* middle up: that is volume */
+    CHECK(!gv_pose_can_arm_resize(&fixture_real_relaxed_two, REAL, &LIM));
+    CHECK(!gv_pose_can_arm_resize(&fixture_real_open_palm, REAL, &LIM));
+    CHECK(!gv_pose_can_arm_resize(&fixture_real_fist, REAL, &LIM));
+    CHECK(!gv_pose_can_arm_resize(&fixture_real_pinch_closed, REAL, &LIM));      /* gap too small to start from */
+    CHECK(!gv_pose_can_arm_resize(&fixture_victory, FIXTURE_VICTORY_ASPECT, &LIM));
+    CHECK(!gv_pose_can_arm_resize(&fixture_thumbs_up, FIXTURE_THUMBS_UP_ASPECT, &LIM)); /* thumb out, index curled */
+}
+
+/* One hand shape, one gesture. If a shape could arm two, which one it armed
+ * would depend on the order of a table, and no user could predict it. */
+static void no_hand_shape_arms_two_gestures(void)
+{
+    const gv_frame *all[] = {
+        &fixture_victory, &fixture_pointing_up, &fixture_thumbs_up, &fixture_real_relaxed_two,
+        &fixture_real_tight_two, &fixture_real_fist, &fixture_real_open_palm, &fixture_real_pinch_open,
+        &fixture_real_pinch_closed, &fixture_real_pointing_thumb_in,
+    };
+    const float asp[] = { 1.0f, 1.0f, 1.0f, REAL, REAL, REAL, REAL, REAL, REAL, REAL };
+    for (int i = 0; i < 10; i++)
+        CHECK(!(gv_pose_can_arm(all[i], asp[i], &LIM) && gv_pose_can_arm_resize(all[i], asp[i], &LIM)));
+}
+
+static void a_pinched_hand_can_stay_but_a_fist_or_an_open_hand_cannot(void)
+{
+    CHECK(gv_pose_can_stay_resize(&fixture_real_pinch_open, REAL, &LIM));
+    CHECK(gv_pose_can_stay_resize(&fixture_real_pinch_closed, REAL, &LIM)); /* index curled by the pinch: still fine */
+    CHECK(!gv_pose_can_stay_resize(&fixture_real_pointing_thumb_in, REAL, &LIM)); /* thumb tucked */
+    CHECK(!gv_pose_can_stay_resize(&fixture_real_open_palm, REAL, &LIM));         /* middle extended */
+
+    gv_frame gone = fixture_real_pinch_open;
+    gone.present = 0;
+    CHECK(!gv_pose_can_stay_resize(&gone, REAL, &LIM));
+    CHECK(!gv_pose_can_arm_resize(&gone, REAL, &LIM));
+}
+
+/* The real pinch-ready hand with ONE landmark moved, so a test can change one
+ * thing at a time. */
+static gv_frame with_thumb_tip_towards_index(const gv_frame *src, float keep)
+{
+    gv_frame out = *src; /* keep = 1 leaves it; 0.2 leaves a fifth of the gap */
+    out.lm[GV_THUMB_TIP].x = src->lm[GV_INDEX_TIP].x + (src->lm[GV_THUMB_TIP].x - src->lm[GV_INDEX_TIP].x) * keep;
+    out.lm[GV_THUMB_TIP].y = src->lm[GV_INDEX_TIP].y + (src->lm[GV_THUMB_TIP].y - src->lm[GV_INDEX_TIP].y) * keep;
+    return out;
+}
+
+static gv_frame with_thumb_bent(const gv_frame *src, float aspect)
+{
+    /* Push the thumb's middle joint a hand-length out to the side of the
+     * thumb's own line: the tip stays where it was (so reach is unchanged) and
+     * the path along the bones gets much longer (so straightness collapses). */
+    gv_frame out = *src;
+    float dx = (src->lm[GV_THUMB_TIP].x - src->lm[GV_THUMB_CMC].x) * aspect;
+    float dy = src->lm[GV_THUMB_TIP].y - src->lm[GV_THUMB_CMC].y;
+    float len = hypotf(dx, dy), side = gv_hand_scale(src, aspect);
+    out.lm[GV_THUMB_IP].x += (-dy / len) * side / aspect; /* perpendicular, back to normalised x */
+    out.lm[GV_THUMB_IP].y += (dx / len) * side;
+    return out;
+}
+
+/* Thumb out and index up, but the fingertips nearly touching: everything about
+ * the pose is right except the gap, so only the gap can be what refuses it. */
+static void a_resize_cannot_start_from_a_near_pinch(void)
+{
+    gv_frame f = with_thumb_tip_towards_index(&fixture_real_pinch_open, 0.2f);
+    CHECK(gv_thumb_is_out(&f, REAL, &LIM));
+    CHECK(gv_finger_is_extended(&f, GV_FINGER_INDEX, REAL, &LIM));
+    CHECK(gv_pinch_gap(&f, REAL) < LIM.pinch_gap_min);
+    CHECK(!gv_pose_can_arm_resize(&f, REAL, &LIM));
+}
+
+/* Out means long AND straight; in means short OR bent. A long, bent thumb is
+ * the case that tells those apart from their opposites. */
+static void a_long_but_bent_thumb_is_in_not_out(void)
+{
+    gv_frame f = with_thumb_bent(&fixture_real_pinch_open, REAL);
+    CHECK_NEAR(gv_thumb_reach(&f, REAL), gv_thumb_reach(&fixture_real_pinch_open, REAL), 1e-5);
+    CHECK(gv_thumb_reach(&f, REAL) > LIM.thumb_extend_reach);          /* long */
+    CHECK(gv_thumb_straightness(&f, REAL) < LIM.thumb_curl_straight);  /* bent */
+    CHECK(!gv_thumb_is_out(&f, REAL, &LIM));
+    CHECK(gv_thumb_is_in(&f, REAL, &LIM));
+}
+
+static void pinch_gap_is_size_and_rotation_free(void)
+{
+    float g = gv_pinch_gap(&fixture_real_pinch_open, REAL);
+    CHECK_NEAR(g, 1.73f, 0.05); /* measured in Python on the same frame */
+    gv_frame small = scaled(&fixture_real_pinch_open, 0.5f);
+    gv_frame turned = rotated(&fixture_real_pinch_open, REAL, 60.0f);
+    CHECK_NEAR(gv_pinch_gap(&small, REAL), g, 0.01);
+    CHECK_NEAR(gv_pinch_gap(&turned, REAL), g, 0.01);
+    CHECK(gv_pinch_gap(&fixture_real_pinch_closed, REAL) < 0.10f);
+}
+
 /* --- which way the palm faces ------------------------------------------- */
 
 static void palm_turn_is_a_size_free_rotation_free_number(void)
@@ -295,6 +419,14 @@ int main(void)
     RUN(absent_hand_is_never_a_pose);
     RUN(pose_survives_rotation);
     RUN(pose_survives_distance_from_camera);
+    RUN(the_thumb_reads_out_when_out_and_in_when_tucked);
+    RUN(the_pinch_ready_hand_can_arm_a_resize);
+    RUN(other_hand_shapes_cannot_arm_a_resize);
+    RUN(no_hand_shape_arms_two_gestures);
+    RUN(a_pinched_hand_can_stay_but_a_fist_or_an_open_hand_cannot);
+    RUN(a_resize_cannot_start_from_a_near_pinch);
+    RUN(a_long_but_bent_thumb_is_in_not_out);
+    RUN(pinch_gap_is_size_and_rotation_free);
     RUN(palm_turn_is_a_size_free_rotation_free_number);
     RUN(turning_the_hand_over_flips_the_sign);
     RUN(hand_scale_matches_measured_value);

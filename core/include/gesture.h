@@ -83,6 +83,19 @@ typedef struct {
     float extend_straight; /* ... AND straightness above this                */
     float curl_reach;      /* curled needs reach below this ...              */
     float curl_straight;   /* ... OR straightness below this                 */
+
+    /* The thumb, judged the same way but on its own numbers (it has one bone
+     * fewer and sits at an angle to the fingers). Measured: out = reach 1.55 -
+     * 2.0 and straightness 0.90 - 0.99; tucked in = 0.12 - 0.53 and 0.33 - 0.44. */
+    float thumb_extend_reach;
+    float thumb_extend_straight;
+    float thumb_curl_reach;
+    float thumb_curl_straight;
+
+    /* Smallest thumb-to-index fingertip gap, in hand-lengths, that may arm a
+     * resize. Touching fingertips hide each other, where tracking is worst, and
+     * the resize scales by gap / gap-at-arming, so a tiny start would explode. */
+    float pinch_gap_min;
 } gv_pose_limits;
 
 typedef struct {
@@ -138,7 +151,7 @@ typedef struct gv_ctx gv_ctx;
 
 /* cfg may be NULL for the defaults. Returns NULL if the config is invalid (a
  * non-finite field; a non-positive aspect, pose limit, gate, slew or filter cutoff;
- * a negative time, dead-band or axis lock distance; an axis dominance below
+ * a negative time, dead-band, axis lock distance or pinch gap; an axis dominance below
  * 1; accel_speed_hi not above accel_speed_lo; an edge margin outside
  * [0, 0.5) or a negative edge rate; curl limits above the extend limits; or a scale gate that excludes 1.0)
  * or if memory cannot be allocated. */

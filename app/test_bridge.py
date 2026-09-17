@@ -105,6 +105,8 @@ def main() -> int:
         c = g.config
         check(abs(c.gain - 0.15) < 1e-6 and abs(c.release_grace_sec - 0.4) < 1e-6, "overrides reach the C config")
         check(abs(c.pose.extend_reach - 1.20) < 1e-6 and abs(c.gate_max_speed - 30.0) < 1e-6, "nested and later fields line up (struct layout)")
+        check(abs(c.pose.pinch_gap_min - 0.73) < 1e-6 and abs(c.arm_hold_sec - 0.25) < 1e-6,
+              "the last nested field and the first field after the nested struct line up")
     try:
         bridge.Gesture(aspect=aspect, gain=float("nan"))
         check(False, "NaN gain is rejected")

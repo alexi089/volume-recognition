@@ -48,6 +48,11 @@ class PoseLimits(C.Structure):
         ("extend_straight", C.c_float),
         ("curl_reach", C.c_float),
         ("curl_straight", C.c_float),
+        ("thumb_extend_reach", C.c_float),
+        ("thumb_extend_straight", C.c_float),
+        ("thumb_curl_reach", C.c_float),
+        ("thumb_curl_straight", C.c_float),
+        ("pinch_gap_min", C.c_float),
     ]
 
 

@@ -80,6 +80,67 @@ int gv_pose_can_stay(const gv_frame *f, float aspect, const gv_pose_limits *lim)
            !gv_finger_is_curled(f, GV_FINGER_MIDDLE, aspect, lim);
 }
 
+float gv_thumb_reach(const gv_frame *f, float aspect)
+{
+    const gv_point *wrist = &f->lm[GV_WRIST];
+    float to_mcp = dist(&f->lm[GV_THUMB_MCP], wrist, aspect);
+    float to_tip = dist(&f->lm[GV_THUMB_TIP], wrist, aspect);
+    return to_mcp > TINY ? to_tip / to_mcp : 0.0f;
+}
+
+float gv_thumb_straightness(const gv_frame *f, float aspect)
+{
+    /* The thumb has one bone fewer than a finger, but MediaPipe still gives it
+     * four landmarks (CMC, MCP, IP, TIP), so the same three-segment sum works. */
+    const gv_point *cmc = &f->lm[GV_THUMB_CMC];
+    const gv_point *mcp = &f->lm[GV_THUMB_MCP];
+    const gv_point *ip  = &f->lm[GV_THUMB_IP];
+    const gv_point *tip = &f->lm[GV_THUMB_TIP];
+
+    float along = dist(cmc, mcp, aspect) + dist(mcp, ip, aspect) + dist(ip, tip, aspect);
+    return along > TINY ? dist(cmc, tip, aspect) / along : 0.0f;
+}
+
+int gv_thumb_is_out(const gv_frame *f, float aspect, const gv_pose_limits *lim)
+{
+    return gv_thumb_reach(f, aspect) > lim->thumb_extend_reach &&
+           gv_thumb_straightness(f, aspect) > lim->thumb_extend_straight;
+}
+
+int gv_thumb_is_in(const gv_frame *f, float aspect, const gv_pose_limits *lim)
+{
+    return gv_thumb_reach(f, aspect) < lim->thumb_curl_reach ||
+           gv_thumb_straightness(f, aspect) < lim->thumb_curl_straight;
+}
+
+float gv_pinch_gap(const gv_frame *f, float aspect)
+{
+    float scale = gv_hand_scale(f, aspect);
+    if (scale < TINY)
+        return 0.0f;
+    return dist(&f->lm[GV_THUMB_TIP], &f->lm[GV_INDEX_TIP], aspect) / scale;
+}
+
+int gv_pose_can_arm_resize(const gv_frame *f, float aspect, const gv_pose_limits *lim)
+{
+    if (!f->present)
+        return 0;
+    return  gv_thumb_is_out(f, aspect, lim) &&
+            gv_finger_is_extended(f, GV_FINGER_INDEX,  aspect, lim) &&
+           !gv_finger_is_extended(f, GV_FINGER_MIDDLE, aspect, lim) &&
+           !gv_finger_is_extended(f, GV_FINGER_RING,   aspect, lim) &&
+           !gv_finger_is_extended(f, GV_FINGER_PINKY,  aspect, lim) &&
+            gv_pinch_gap(f, aspect) >= lim->pinch_gap_min;
+}
+
+int gv_pose_can_stay_resize(const gv_frame *f, float aspect, const gv_pose_limits *lim)
+{
+    if (!f->present)
+        return 0;
+    return !gv_thumb_is_in(f, aspect, lim) &&
+           !gv_finger_is_extended(f, GV_FINGER_MIDDLE, aspect, lim);
+}
+
 float gv_palm_turn(const gv_frame *f, float aspect)
 {
     const gv_point *w = &f->lm[GV_WRIST];

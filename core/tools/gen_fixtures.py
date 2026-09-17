@@ -30,6 +30,18 @@ PHOTOS = ["victory", "pointing_up", "thumbs_up"]
 #   fist, open_palm  the two ways out of the pose
 REAL_TRACE = ROOT / "traces" / "real_first_session.csv"
 REAL_FRAMES = {"relaxed_two": 410, "tight_two": 162, "fist": 511, "open_palm": 254}
+
+# Frames from the thumb probe clips (app/record_pinch_probe.sh): name -> (clip, 1-based line).
+# The clips are not committed (recordings stay out of git); fixtures.h is the committed copy,
+# so this section can only be regenerated on a machine that still has the clips.
+#   pinch_open         the resize pose held: thumb and index out and apart, the rest curled
+#   pinch_closed       the same hand fully pinched: fingertip gap 0.04 hand-lengths
+#   pointing_thumb_in  index out, thumb tucked: must NOT arm a resize
+PROBE_FRAMES = {
+    "pinch_open": ("probe_pinch_open", 240),
+    "pinch_closed": ("probe_pinch_move", 23),
+    "pointing_thumb_in": ("probe_pointing", 211),
+}
 OUT = ROOT / "core" / "tests" / "fixtures.h"
 
 
@@ -80,6 +92,26 @@ def main() -> None:
             lines.append(f"        {{ {x:.6f}f, {y:.6f}f, {z:.6f}f }},")
         lines.append("    },")
         lines.append("    .present = 1,")
+        lines.append("    .t_sec = 0.0,")
+        lines.append("};")
+        lines.append("")
+    for name, (clip, line_no) in PROBE_FRAMES.items():
+        path = ROOT / "traces" / f"{clip}.csv"
+        if not path.exists():
+            raise SystemExit(f"{path.name} is not here (probe clips are not committed); "
+                             "keep the committed fixtures.h, or re-record with app/record_pinch_probe.sh")
+        fields = [float(v) for v in path.read_text().splitlines()[line_no - 1].split(",")]
+        if len(fields) != 66 or fields[1] != 1.0:
+            raise SystemExit(f"{path.name}:{line_no} is not a 66-field hand frame")
+        lines.append(f"/* {path.name} line {line_no}, t = {fields[0]:.1f} s */")
+        lines.append(f"static const gv_frame fixture_real_{name} = {{")
+        lines.append("    .lm = {")
+        for i in range(21):
+            x, y, z = fields[2 + 3 * i : 5 + 3 * i]
+            lines.append(f"        {{ {x:.6f}f, {y:.6f}f, {z:.6f}f }},")
+        lines.append("    },")
+        lines.append("    .present = 1,")
+        lines.append(f"    .handedness = {int(fields[65])},")
         lines.append("    .t_sec = 0.0,")
         lines.append("};")
         lines.append("")

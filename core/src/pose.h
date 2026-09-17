@@ -62,6 +62,32 @@ int gv_pose_can_arm(const gv_frame *f, float aspect, const gv_pose_limits *lim);
  * on every frame is what made the first version drop out mid-slide. */
 int gv_pose_can_stay(const gv_frame *f, float aspect, const gv_pose_limits *lim);
 
+/* --- the thumb, and the resize poses ------------------------------------ */
+
+/* As gv_finger_reach / gv_finger_straightness, for the thumb: reach is tip to
+ * wrist over knuckle (MCP) to wrist; straightness runs from the base joint
+ * (CMC) to the tip. Tip-to-index-knuckle distance looked like the obvious
+ * measure of "thumb out" and is not: it is LARGER with the thumb tucked across
+ * the curled fingers than in an open pinch. These two were measured instead. */
+float gv_thumb_reach(const gv_frame *f, float aspect);
+float gv_thumb_straightness(const gv_frame *f, float aspect);
+int   gv_thumb_is_out(const gv_frame *f, float aspect, const gv_pose_limits *lim); /* long AND straight */
+int   gv_thumb_is_in(const gv_frame *f, float aspect, const gv_pose_limits *lim);  /* short OR bent */
+
+/* Thumb tip to index tip, in hand-lengths: what the resize gesture measures. */
+float gv_pinch_gap(const gv_frame *f, float aspect);
+
+/* Strict, for starting a resize: thumb out, index extended, the other three
+ * not extended, and the two fingertips far enough apart to start from. The
+ * middle finger is what separates this from the volume pose (extended there). */
+int gv_pose_can_arm_resize(const gv_frame *f, float aspect, const gv_pose_limits *lim);
+
+/* Lenient, for carrying on: thumb not in, and middle not extended. The index
+ * finger is deliberately absent: pinching curls it (its reach falls to 0.57),
+ * and a rule that needed it "not curled" would let go exactly when the user
+ * pinches. Tucking the thumb (a fist) or opening the hand ends it. */
+int gv_pose_can_stay_resize(const gv_frame *f, float aspect, const gv_pose_limits *lim);
+
 /* Which way the hand is turned, as one signed number: the 2D cross product of
  * (index knuckle - wrist) and (pinky knuckle - wrist), divided by the hand's
  * size squared. Its SIGN says on which side of the hand the thumb is, which

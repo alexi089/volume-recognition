@@ -42,7 +42,15 @@ gv_config gv_default_config(void)
     gv_config cfg = {
         .aspect            = 16.0f / 9.0f,
         .pose              = { .extend_reach = 1.20f, .extend_straight = 0.93f,
-                               .curl_reach = 1.00f, .curl_straight = 0.75f },
+                               .curl_reach = 1.00f, .curl_straight = 0.75f,
+                               /* Thumb, from the probe clips: out = reach 1.55 - 2.0 and
+                                * straightness 0.90 - 0.99; tucked in = 0.12 - 0.53 and
+                                * 0.33 - 0.44. Each limit sits midway, or at the tucked
+                                * range's upper edge. */
+                               .thumb_extend_reach = 1.05f, .thumb_extend_straight = 0.67f,
+                               .thumb_curl_reach = 0.55f, .thumb_curl_straight = 0.45f,
+                               /* half the smallest gap seen in the held pinch-ready pose */
+                               .pinch_gap_min = 0.73f },
         .arm_hold_sec      = 0.25f,
         /* 250 ms is about seven frames at the 27 fps the camera loop manages;
          * the first live session saw frame gaps of 75 ms at the 99th percentile. */
@@ -94,7 +102,14 @@ static int config_is_valid(const gv_config *c)
                   p->curl_reach > 0.0f && p->curl_straight > 0.0f &&
                   /* curl below extend, or one finger could be both at once */
                   p->curl_reach <= p->extend_reach &&
-                  p->curl_straight <= p->extend_straight;
+                  p->curl_straight <= p->extend_straight &&
+                  /* the thumb's limits, by the same rules */
+                  p->thumb_extend_reach > 0.0f && isfinite(p->thumb_extend_reach) &&
+                  p->thumb_extend_straight > 0.0f && isfinite(p->thumb_extend_straight) &&
+                  p->thumb_curl_reach > 0.0f && p->thumb_curl_straight > 0.0f &&
+                  p->thumb_curl_reach <= p->thumb_extend_reach &&
+                  p->thumb_curl_straight <= p->thumb_extend_straight &&
+                  p->pinch_gap_min >= 0.0f && isfinite(p->pinch_gap_min);
     /* the scale gate has to let an unchanged hand (ratio 1.0) through */
     int gate_ok = c->gate_scale_min > 0.0f && c->gate_scale_min <= 1.0f &&
                   c->gate_scale_max >= 1.0f && isfinite(c->gate_scale_max) &&
