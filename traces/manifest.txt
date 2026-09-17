@@ -1,0 +1,13 @@
+# Traces replayed by `make -C core replay` (part of `make test`).
+# <file, relative to traces/>  <up|down|none>
+#
+# The synthetic_* files come from core/tools/gen_traces.py: real hand shapes,
+# scripted motion, no jitter. Add real recordings below as they are made:
+#   make run ARGS="--record traces/real_slide_up.csv"
+# Worth recording as `none`: scratching your nose, reaching for a cup, typing,
+# waving, talking with your hands.
+
+synthetic_slide_right.csv          up
+synthetic_slide_left.csv           down
+synthetic_other_shapes_sweep.csv   none
+synthetic_glimpse_of_pose.csv      none

@@ -10,10 +10,10 @@ BUILD   := build
 # these bugs otherwise pass silently until they corrupt something unrelated.
 SAN     := -fsanitize=address,undefined -fno-omit-frame-pointer
 
-TESTS   := test_filter test_pose test_gesture test_step
+TESTS   := test_filter test_pose test_gesture test_step test_trace
 TEST_BINS := $(addprefix $(BUILD)/,$(TESTS))
 
-.PHONY: all test clean
+.PHONY: all test replay clean
 
 all: $(BUILD)/vol $(BUILD)/libgesture.dylib
 
@@ -47,9 +47,26 @@ $(BUILD)/libgesture.dylib: $(LIB_SRC) $(CORE_HDR) include/step.h include/volume.
 $(BUILD)/test_step: tests/test_step.c tests/fixtures.h src/step.c include/step.h $(CORE_SRC) $(CORE_HDR) tests/test.h | $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) tests/test_step.c src/step.c $(CORE_SRC) -lm -o $@
 
+$(BUILD)/test_trace: tests/test_trace.c src/trace.c src/trace.h include/gesture.h tests/test.h | $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) tests/test_trace.c src/trace.c -lm -o $@
+
+$(BUILD)/replay: tools/replay.c src/trace.c src/trace.h $(CORE_SRC) $(CORE_HDR) | $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) tools/replay.c src/trace.c $(CORE_SRC) -lm -o $@
+
 # Run every test binary; stop at the first one that fails.
-test: $(TEST_BINS)
+test: $(TEST_BINS) replay
 	@for t in $(TEST_BINS); do ./$$t || exit 1; done
+
+# Replay every trace listed in traces/manifest.txt. All of them run even if
+# one fails, so a single run shows the whole picture; the braces keep `fail`
+# and the loop in the same subshell, so the final exit status reaches make.
+replay: $(BUILD)/replay
+	@grep -v -E '^[[:space:]]*(#|$$)' ../traces/manifest.txt | { \
+		fail=0; \
+		while read -r file expect; do \
+			./$(BUILD)/replay "../traces/$$file" "$$expect" || fail=1; \
+		done; \
+		exit $$fail; }
 
 clean:
 	rm -rf $(BUILD)
