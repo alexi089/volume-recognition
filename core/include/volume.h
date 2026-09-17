@@ -26,9 +26,13 @@ vol_status vol_get(float *out);
 
 /* Sets the output volume. v is clamped to [0, 1].
  *
- * The value is read back after writing. Some devices (observed: Bluetooth
- * headphones) advertise a settable volume, return success, and change nothing;
- * that comes back as VOL_ERR_IGNORED rather than a false VOL_OK. */
+ * The value is read back after writing, as a best-effort check. Observed: a
+ * Bluetooth headset advertised a settable volume, returned success, and
+ * changed nothing; that now comes back as VOL_ERR_IGNORED instead of a false
+ * VOL_OK. The check has limits, none of them seen on real hardware yet:
+ *   - a device that applies the value late would be misreported as ignoring it;
+ *   - so would one with fewer than about six volume steps (the tolerance is 0.08);
+ *   - a driver that stores the value but never drives the hardware passes. */
 vol_status vol_set(float v);
 
 /* Copies the default output device's name into buf (always NUL-terminated
@@ -38,7 +42,9 @@ vol_status vol_device_name(char *buf, size_t len);
 /* Human-readable text for a vol_status. Never returns NULL. */
 const char *vol_strerror(vol_status s);
 
-/* The raw OSStatus from the most recent failing CoreAudio call, for diagnosis. */
+/* The raw OSStatus from the most recent failing CoreAudio call, for diagnosis.
+ * It lives in one unsynchronised global, so this module is not thread-safe:
+ * call it from a single thread. */
 int vol_last_os_status(void);
 
 #endif /* VOLUME_H */

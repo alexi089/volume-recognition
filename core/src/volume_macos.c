@@ -102,13 +102,23 @@ vol_status vol_set(float v)
     if (s != VOL_OK)
         return s;
 
+    if (!AudioObjectHasProperty(dev, &k_volume_addr))
+        return VOL_ERR_NO_SOFTWARE_VOLUME;
+
+    /* "The query failed" and "the answer was no" are different problems and
+     * get different codes; folding them together would hide a real CoreAudio
+     * error behind a message about the device. */
     Boolean settable = false;
-    if (!AudioObjectHasProperty(dev, &k_volume_addr) ||
-        AudioObjectIsPropertySettable(dev, &k_volume_addr, &settable) != noErr || !settable)
+    OSStatus os = AudioObjectIsPropertySettable(dev, &k_volume_addr, &settable);
+    if (os != noErr) {
+        g_last_os_status = os;
+        return VOL_ERR_OS;
+    }
+    if (!settable)
         return VOL_ERR_NO_SOFTWARE_VOLUME;
 
     Float32 value = v;
-    OSStatus os = AudioObjectSetPropertyData(dev, &k_volume_addr, 0, NULL, sizeof value, &value);
+    os = AudioObjectSetPropertyData(dev, &k_volume_addr, 0, NULL, sizeof value, &value);
     if (os != noErr) {
         g_last_os_status = os;
         return VOL_ERR_OS;
@@ -144,10 +154,12 @@ vol_status vol_device_name(char *buf, size_t len)
     CFStringRef name = NULL;
     UInt32 size = sizeof name;
     OSStatus os = AudioObjectGetPropertyData(dev, &k_name_addr, 0, NULL, &size, &name);
-    if (os != noErr || name == NULL) {
+    if (os != noErr) {
         g_last_os_status = os;
         return VOL_ERR_OS;
     }
+    if (name == NULL)
+        return VOL_OK; /* the device simply has no name; buf is already "" */
 
     Boolean ok = CFStringGetCString(name, buf, (CFIndex)len, kCFStringEncodingUTF8);
     CFRelease(name);

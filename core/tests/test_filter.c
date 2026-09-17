@@ -90,6 +90,21 @@ static void repeated_timestamp_returns_previous_output(void)
     CHECK_NEAR(y3, y1, 1e-6);
 }
 
+/* One bad sample must not poison the filter: NaN in any arithmetic gives NaN
+ * out, and since the output feeds the next step, it would never recover. */
+static void non_finite_sample_is_ignored(void)
+{
+    gv_filter f = make_filter(BETA);
+    gv_filter_apply(&f, 0.5f, 0.0);
+    float before = gv_filter_apply(&f, 0.5f, DT);
+    float during = gv_filter_apply(&f, NAN, 2 * DT);
+    float inf_in = gv_filter_apply(&f, INFINITY, 3 * DT);
+    float after = gv_filter_apply(&f, 0.5f, 4 * DT);
+    CHECK_NEAR(during, before, 1e-6);
+    CHECK_NEAR(inf_in, before, 1e-6);
+    CHECK_NEAR(after, 0.5f, 1e-5);
+}
+
 static void reset_forgets_history(void)
 {
     gv_filter f = make_filter(BETA);
@@ -108,6 +123,7 @@ int main(void)
     RUN(fast_movement_is_followed_closely);
     RUN(speed_adaptation_reduces_lag);
     RUN(repeated_timestamp_returns_previous_output);
+    RUN(non_finite_sample_is_ignored);
     RUN(reset_forgets_history);
     return TEST_SUMMARY();
 }

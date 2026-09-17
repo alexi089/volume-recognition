@@ -4,11 +4,17 @@ MODEL_URL := https://storage.googleapis.com/mediapipe-models/hand_landmarker/han
 
 .PHONY: setup model run
 
-setup: $(PY) model
+# The stamp file is written only after the install succeeds. Depending on
+# .venv/bin/python instead would treat a venv whose install failed half-way as
+# finished, and never retry.
+STAMP := .venv/.installed
 
-$(PY):
-	uv venv --python 3.12 .venv
+setup: $(STAMP) model
+
+$(STAMP): requirements.txt
+	test -x $(PY) || uv venv --python 3.12 .venv
 	uv pip install --python $(PY) -r requirements.txt
+	touch $(STAMP)
 
 model: $(MODEL)
 

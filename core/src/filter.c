@@ -36,15 +36,23 @@ void gv_filter_reset(gv_filter *f)
 {
     f->has_prev = 0;
     f->x_prev = 0.0f;
+    f->raw_prev = 0.0f;
     f->dx_prev = 0.0f;
     f->t_prev = 0.0;
 }
 
 float gv_filter_apply(gv_filter *f, float x, double t_sec)
 {
+    /* NaN or infinity in any of the arithmetic below gives NaN out, and the
+     * output is stored as the next step's input, so one bad sample would
+     * poison every later result. Drop it and keep the state untouched. */
+    if (!isfinite(x))
+        return f->has_prev ? f->x_prev : x;
+
     if (!f->has_prev) {
         f->has_prev = 1;
         f->x_prev = x;
+        f->raw_prev = x;
         f->dx_prev = 0.0f;
         f->t_prev = t_sec;
         return x;
@@ -57,9 +65,10 @@ float gv_filter_apply(gv_filter *f, float x, double t_sec)
     if (dt <= 0.0f)
         return f->x_prev;
 
-    /* 1. Estimate speed, and smooth it: raw frame-to-frame speed is the
-     *    noisiest quantity here, since it divides jitter by a tiny dt. */
-    float dx = (x - f->x_prev) / dt;
+    /* 1. Estimate speed from the raw samples, as the paper does, and smooth
+     *    it: raw frame-to-frame speed is the noisiest quantity here, since it
+     *    divides jitter by a tiny dt. */
+    float dx = (x - f->raw_prev) / dt;
     float dx_hat = low_pass(dx, f->dx_prev, smoothing_factor(f->d_cutoff, dt));
 
     /* 2. Faster movement -> higher cutoff -> less smoothing, less lag. */
@@ -69,6 +78,7 @@ float gv_filter_apply(gv_filter *f, float x, double t_sec)
     float x_hat = low_pass(x, f->x_prev, smoothing_factor(cutoff, dt));
 
     f->x_prev = x_hat;
+    f->raw_prev = x;
     f->dx_prev = dx_hat;
     f->t_prev = t_sec;
     return x_hat;

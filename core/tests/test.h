@@ -29,12 +29,16 @@ static int t_failures;
 
 #define CHECK_NEAR(actual, expected, tol)                                        \
     do {                                                                         \
+        /* Each argument is copied into a local exactly once. A macro pastes  \
+         * its arguments in as text, so using `tol` twice would evaluate it    \
+         * twice, which matters the day someone passes a function call. */     \
         double t_a = (double)(actual), t_e = (double)(expected);                 \
+        double t_t = (double)(tol);                                              \
         t_checks++;                                                              \
-        if (!(fabs(t_a - t_e) <= (double)(tol))) {                               \
+        if (!(fabs(t_a - t_e) <= t_t)) {                                         \
             t_failures++;                                                        \
             fprintf(stderr, "    FAIL %s:%d: %s = %g, expected %g +/- %g\n",     \
-                    __FILE__, __LINE__, #actual, t_a, t_e, (double)(tol));       \
+                    __FILE__, __LINE__, #actual, t_a, t_e, t_t);                 \
         }                                                                        \
     } while (0)
 

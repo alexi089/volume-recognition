@@ -25,6 +25,7 @@ typedef struct {
     float  d_cutoff;
     int    has_prev;  /* 0 until the first sample arrives */
     float  x_prev;    /* previous filtered value */
+    float  raw_prev;  /* previous raw sample, for the speed estimate */
     float  dx_prev;   /* previous filtered speed */
     double t_prev;    /* previous timestamp, seconds */
 } gv_filter;
@@ -36,7 +37,8 @@ void  gv_filter_reset(gv_filter *f);
 
 /* Feed one sample taken at time t_sec; returns the filtered value. A timestamp
  * that does not advance returns the previous output rather than dividing by
- * a zero or negative time step. */
+ * a zero or negative time step. A NaN or infinite sample is ignored: the
+ * previous output is returned and the filter's state is left untouched. */
 float gv_filter_apply(gv_filter *f, float x, double t_sec);
 
 #endif /* GV_FILTER_H */
