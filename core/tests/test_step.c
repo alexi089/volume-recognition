@@ -5,6 +5,7 @@
 #include "test.h"
 
 #include "fixtures.h"
+#include "pinch_motion.h"
 #include "pose.h"
 #include "step.h"
 
@@ -150,6 +151,34 @@ static void an_output_without_volume_control_is_reported_while_idle(void)
     gv_destroy(ctx);
 }
 
+/* `changed` belongs to whichever gesture is armed. A resize that changes its
+ * scale must never reach the volume backend: the output's `volume` field is
+ * not what moved. */
+static void a_resize_never_writes_the_volume(void)
+{
+    fake_reset(0.40f);
+    gv_config cfg = gv_default_config();
+    cfg.aspect = FIXTURE_REAL_ASPECT;
+    gv_ctx *ctx = gv_create(&cfg);
+    now = 0.0;
+    int resize_changes = 0;
+    for (int i = 0; i < 60; i++) { /* hold open for 1 s, then pinch a third of the way over 1 s */
+        float k = i < 30 ? 0.0f : 0.35f * (float)(i - 30) / 30.0f;
+        gv_frame f = pinch(k);
+        f.t_sec = now;
+        last = gv_step(ctx, &f, &fake_ops);
+        if (last.out.changed && last.out.kind == GV_KIND_RESIZE)
+            resize_changes++;
+        now += DT;
+    }
+    CHECK(last.out.state == GV_ARMED && last.out.kind == GV_KIND_RESIZE);
+    CHECK(resize_changes > 0); /* the scale really did move */
+    CHECK(fake_set_calls == 0);
+    CHECK_NEAR(fake_volume, 0.40f, 1e-6);
+    CHECK(last.vol == VOL_OK);
+    gv_destroy(ctx);
+}
+
 int main(void)
 {
     fprintf(stderr, "test_step\n");
@@ -158,5 +187,6 @@ int main(void)
     RUN(a_volume_change_made_elsewhere_is_picked_up_while_idle);
     RUN(the_status_of_a_failing_write_is_on_that_frames_result);
     RUN(an_output_without_volume_control_is_reported_while_idle);
+    RUN(a_resize_never_writes_the_volume);
     return TEST_SUMMARY();
 }

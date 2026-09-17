@@ -196,6 +196,10 @@ static void nonsense_config_is_rejected(void)
     c = gv_default_config(); c.pose.thumb_curl_straight = 0.99f; CHECK(gv_create(&c) == NULL);
     c = gv_default_config(); c.pose.pinch_gap_min = -0.1f; CHECK(gv_create(&c) == NULL);
     c = gv_default_config(); c.pose.pinch_gap_min = NAN;   CHECK(gv_create(&c) == NULL);
+    /* the resize divides by the gap it armed at, so "any gap will do" is not a setting */
+    c = gv_default_config(); c.pose.pinch_gap_min = 0.0f;  CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.pose.thumb_clear_min = -0.1f; CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.pose.thumb_clear_min = NAN;   CHECK(gv_create(&c) == NULL);
     c = gv_default_config(); c.gate_scale_min = 1.1f;      CHECK(gv_create(&c) == NULL);
     c = gv_default_config(); c.gate_scale_max = 0.9f;      CHECK(gv_create(&c) == NULL);
     c = gv_default_config(); c.gate_max_speed = 0.0f;      CHECK(gv_create(&c) == NULL);

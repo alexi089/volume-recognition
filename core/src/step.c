@@ -18,8 +18,8 @@ gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_volume_ops *
 
     /* 3. Apply. A failed write is the more useful thing to report on a frame
      *    that wrote; otherwise report how the read went. */
-    if (r.out.changed)
-        r.vol = ops->set(r.out.volume);
+    if (r.out.changed && r.out.kind == GV_KIND_VOLUME)
+        r.vol = ops->set(r.out.volume); /* `changed` belongs to the active gesture; only volume's is a volume */
     else
         r.vol = get_status;
 

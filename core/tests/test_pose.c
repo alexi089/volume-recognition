@@ -61,7 +61,7 @@ static const gv_pose_limits LIM = {
     .extend_reach = 1.20f, .extend_straight = 0.93f, .curl_reach = 1.00f, .curl_straight = 0.75f,
     .thumb_extend_reach = 1.05f, .thumb_extend_straight = 0.67f,
     .thumb_curl_reach = 0.55f, .thumb_curl_straight = 0.45f,
-    .pinch_gap_min = 0.73f,
+    .pinch_gap_min = 0.73f, .thumb_clear_min = 0.62f,
 };
 #define REAL FIXTURE_REAL_ASPECT
 
@@ -257,10 +257,14 @@ static void no_hand_shape_arms_two_gestures(void)
         CHECK(!(gv_pose_can_arm(all[i], asp[i], &LIM) && gv_pose_can_arm_resize(all[i], asp[i], &LIM)));
 }
 
-static void a_pinched_hand_can_stay_but_a_fist_or_an_open_hand_cannot(void)
+static void the_open_pinch_can_stay_a_fist_a_full_pinch_or_an_open_hand_cannot(void)
 {
     CHECK(gv_pose_can_stay_resize(&fixture_real_pinch_open, REAL, &LIM));
-    CHECK(gv_pose_can_stay_resize(&fixture_real_pinch_closed, REAL, &LIM)); /* index curled by the pinch: still fine */
+    /* A full pinch and a fist are nearly the same shape in 2D (measured: thumb
+     * reach 1.57 vs 1.27, index curled in both, fingertip gap 0.04 vs 0.07), so
+     * neither may stay: a fist must never be read as "shrink to the minimum". */
+    CHECK(!gv_pose_can_stay_resize(&fixture_real_pinch_closed, REAL, &LIM));
+    CHECK(!gv_pose_can_stay_resize(&fixture_real_fist, REAL, &LIM));
     CHECK(!gv_pose_can_stay_resize(&fixture_real_pointing_thumb_in, REAL, &LIM)); /* thumb tucked */
     CHECK(!gv_pose_can_stay_resize(&fixture_real_open_palm, REAL, &LIM));         /* middle extended */
 
@@ -326,6 +330,49 @@ static void pinch_gap_is_size_and_rotation_free(void)
     CHECK_NEAR(gv_pinch_gap(&small, REAL), g, 0.01);
     CHECK_NEAR(gv_pinch_gap(&turned, REAL), g, 0.01);
     CHECK(gv_pinch_gap(&fixture_real_pinch_closed, REAL) < 0.10f);
+}
+
+/* Measured in Python on the same frames: the thumb tip stands well clear of
+ * the curled fingers in the pinch-ready hand, and lies on them when pointing. */
+static void thumb_clearance_tells_a_held_out_thumb_from_a_resting_one(void)
+{
+    CHECK_NEAR(gv_thumb_clearance(&fixture_real_pinch_open, REAL), 1.26f, 0.05);
+    CHECK_NEAR(gv_thumb_clearance(&fixture_real_pointing_thumb_in, REAL), 0.20f, 0.05);
+    CHECK_NEAR(gv_thumb_clearance(&fixture_pointing_up, FIXTURE_POINTING_UP_ASPECT), 0.24f, 0.05);
+    /* in the victory photo the thumb lies on the RING finger (0.32); the middle is 1.55 away */
+    CHECK_NEAR(gv_thumb_clearance(&fixture_victory, FIXTURE_VICTORY_ASPECT), 0.32f, 0.05);
+    gv_frame small = scaled(&fixture_real_pinch_open, 0.5f);
+    gv_frame turned = rotated(&fixture_real_pinch_open, REAL, 60.0f);
+    CHECK_NEAR(gv_thumb_clearance(&small, REAL), 1.26f, 0.05);
+    CHECK_NEAR(gv_thumb_clearance(&turned, REAL), 1.26f, 0.05);
+}
+
+/* Pointing up, seen from the front, with the thumb resting on the curled
+ * fingers. Every other part of the arm pose says yes to this photo: the thumb
+ * is long and straight, the index is up, the other three are down and the
+ * fingertips are 1.02 hand-lengths apart. Only where the thumb tip IS refuses
+ * it. Found when this photo armed a resize in the state-machine tests. */
+static void pointing_with_a_resting_thumb_cannot_arm_a_resize(void)
+{
+    const gv_frame *f = &fixture_pointing_up;
+    const float a = FIXTURE_POINTING_UP_ASPECT;
+    CHECK(gv_thumb_is_out(f, a, &LIM));
+    CHECK(gv_finger_is_extended(f, GV_FINGER_INDEX, a, &LIM));
+    CHECK(!gv_finger_is_extended(f, GV_FINGER_MIDDLE, a, &LIM));
+    CHECK(gv_pinch_gap(f, a) >= LIM.pinch_gap_min);
+    CHECK(gv_thumb_clearance(f, a) < LIM.thumb_clear_min);
+    CHECK(!gv_pose_can_arm_resize(f, a, &LIM));
+}
+
+/* Clearance is a rule for starting only. Pinching brings the thumb tip down
+ * past the curled fingers (0.17 at the pinched end of the real clip), so a
+ * resize under way must not care about it. */
+static void clearance_does_not_end_a_resize_under_way(void)
+{
+    gv_pose_limits strict = LIM;
+    strict.thumb_clear_min = 100.0f; /* nothing could ever be this clear */
+    CHECK(!gv_pose_can_arm_resize(&fixture_real_pinch_open, REAL, &strict));
+    CHECK(gv_pose_can_stay_resize(&fixture_real_pinch_open, REAL, &strict));
 }
 
 /* --- which way the palm faces ------------------------------------------- */
@@ -423,10 +470,13 @@ int main(void)
     RUN(the_pinch_ready_hand_can_arm_a_resize);
     RUN(other_hand_shapes_cannot_arm_a_resize);
     RUN(no_hand_shape_arms_two_gestures);
-    RUN(a_pinched_hand_can_stay_but_a_fist_or_an_open_hand_cannot);
+    RUN(the_open_pinch_can_stay_a_fist_a_full_pinch_or_an_open_hand_cannot);
     RUN(a_resize_cannot_start_from_a_near_pinch);
     RUN(a_long_but_bent_thumb_is_in_not_out);
     RUN(pinch_gap_is_size_and_rotation_free);
+    RUN(thumb_clearance_tells_a_held_out_thumb_from_a_resting_one);
+    RUN(pointing_with_a_resting_thumb_cannot_arm_a_resize);
+    RUN(clearance_does_not_end_a_resize_under_way);
     RUN(palm_turn_is_a_size_free_rotation_free_number);
     RUN(turning_the_hand_over_flips_the_sign);
     RUN(hand_scale_matches_measured_value);

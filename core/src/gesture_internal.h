@@ -7,8 +7,12 @@
 #ifndef GV_GESTURE_INTERNAL_H
 #define GV_GESTURE_INTERNAL_H
 
+#include <stddef.h> /* NULL, for a gesture that leaves an optional hook out */
+
 #include "filter.h"
 #include "gesture.h"
+
+#define GV_SCALE_HISTORY 32
 
 /* The longest frame gap the slew limit gives credit for: about three frames.
  * With max_slew = 2 that bounds any single step to 0.2 of the range. */
@@ -26,6 +30,8 @@ struct gv_ctx {
 
     double arm_started_t;   /* when the current ARMING began */
     double last_pose_t;     /* last frame that showed the pose */
+    double last_hand_t;     /* last usable frame with a hand in it, in any shape */
+    double last_hand_before_t; /* the same, as it stood before the current frame */
 
     /* hand size is averaged over the arming window: one noisy frame should
      * not set the scale for the whole slide */
@@ -48,6 +54,18 @@ struct gv_ctx {
     double believed_t;
 
     double slew_t;          /* when the reported volume was last allowed to move */
+
+    /* resize (gestures/resize.c) */
+    gv_filter gap_filter;   /* smooths the thumb-to-index fingertip gap */
+    float  gap_at_arm;      /* that gap, in hand-lengths, at the moment of arming */
+    float  reported_scale;  /* last scale handed to the caller; 1.0 at arming */
+    /* A short history of reported scales, for the rollback on release. A ring
+     * buffer: a fixed array plus the index of the next slot to write, wrapping
+     * round, so the newest GV_SCALE_HISTORY entries are always there and
+     * nothing is ever allocated or shifted. 32 frames is about a second. */
+    struct { double t; float scale; } scale_history[GV_SCALE_HISTORY];
+    int    scale_history_next;
+    int    scale_history_count;
 
     gv_axis axis;           /* which way this slide runs; NONE until it is clear */
     float   axis_offset;    /* signed lock distance; travel is counted from there */
@@ -74,9 +92,15 @@ typedef struct gv_gesture {
     int  (*on_frame)(gv_ctx *ctx, const gv_frame *f, float x, float y, double t, double since_t);
     /* Reset the gesture's own state (called on arming and on release). */
     void (*on_idle)(gv_ctx *ctx);
+    /* Optional (may be NULL). Called once as an ARMED gesture ends, before
+     * on_idle. pose_ended is 1 if the hand was still in view and changed shape,
+     * 0 if it simply was not there any more. Returns 1 if the gesture has a
+     * final value to report; it is sent out, with `changed`, on that frame. */
+    int  (*on_release)(gv_ctx *ctx, int pose_ended);
 } gv_gesture;
 
 extern const gv_gesture gv_gesture_volume;
+extern const gv_gesture gv_gesture_resize;
 
 float gv_clamp01(float v);
 

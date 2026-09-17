@@ -16,7 +16,7 @@ SAN     := -fsanitize=address,undefined -fno-omit-frame-pointer
 # project compiles in about a second, so precision here buys nothing.
 HDRS    := $(wildcard include/*.h src/*.h tests/*.h)
 
-TESTS   := test_filter test_pose test_gesture test_step test_trace
+TESTS   := test_filter test_pose test_gesture test_resize test_step test_trace
 TEST_BINS := $(addprefix $(BUILD)/,$(TESTS))
 
 .PHONY: all test replay clean
@@ -35,10 +35,13 @@ $(BUILD)/test_filter: tests/test_filter.c src/filter.c $(HDRS) | $(BUILD)
 $(BUILD)/test_pose: tests/test_pose.c src/pose.c $(HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) tests/test_pose.c src/pose.c -lm -o $@
 
-CORE_SRC := src/gesture.c src/gestures/volume.c src/pose.c src/filter.c
+CORE_SRC := src/gesture.c src/gestures/volume.c src/gestures/resize.c src/pose.c src/filter.c
 
 $(BUILD)/test_gesture: tests/test_gesture.c $(CORE_SRC) $(HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) tests/test_gesture.c $(CORE_SRC) -lm -o $@
+
+$(BUILD)/test_resize: tests/test_resize.c $(CORE_SRC) $(HDRS) | $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) tests/test_resize.c $(CORE_SRC) -lm -o $@
 
 # The shared library the Python side loads with ctypes. No sanitizers here: an
 # ASan-instrumented dylib cannot be loaded into an uninstrumented Python.

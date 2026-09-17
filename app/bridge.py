@@ -53,6 +53,7 @@ class PoseLimits(C.Structure):
         ("thumb_curl_reach", C.c_float),
         ("thumb_curl_straight", C.c_float),
         ("pinch_gap_min", C.c_float),
+        ("thumb_clear_min", C.c_float),
     ]
 
 
@@ -78,6 +79,11 @@ class Config(C.Structure):
         ("filter_min_cutoff", C.c_float),
         ("filter_beta", C.c_float),
         ("filter_d_cutoff", C.c_float),
+        ("scale_min", C.c_float),
+        ("scale_max", C.c_float),
+        ("scale_dead_band", C.c_float),
+        ("scale_max_slew", C.c_float),
+        ("release_rollback_sec", C.c_float),
     ]
 
 

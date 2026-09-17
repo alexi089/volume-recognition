@@ -77,15 +77,24 @@ int   gv_thumb_is_in(const gv_frame *f, float aspect, const gv_pose_limits *lim)
 /* Thumb tip to index tip, in hand-lengths: what the resize gesture measures. */
 float gv_pinch_gap(const gv_frame *f, float aspect);
 
-/* Strict, for starting a resize: thumb out, index extended, the other three
- * not extended, and the two fingertips far enough apart to start from. The
+/* Thumb tip to the nearest joint (PIP, DIP or tip) of the middle, ring and
+ * pinky fingers, in hand-lengths: is the thumb held out, or lying on the fist? */
+float gv_thumb_clearance(const gv_frame *f, float aspect);
+
+/* Strict, for starting a resize: thumb out and clear of the curled fingers,
+ * index extended, the other three not extended, and the two fingertips far
+ * enough apart to start from. The
  * middle finger is what separates this from the volume pose (extended there). */
 int gv_pose_can_arm_resize(const gv_frame *f, float aspect, const gv_pose_limits *lim);
 
-/* Lenient, for carrying on: thumb not in, and middle not extended. The index
- * finger is deliberately absent: pinching curls it (its reach falls to 0.57),
- * and a rule that needed it "not curled" would let go exactly when the user
- * pinches. Tucking the thumb (a fist) or opening the hand ends it. */
+/* Lenient, for carrying on: thumb not in, index not curled, middle not
+ * extended. The index matters because a full pinch and a fist are nearly the
+ * same shape in 2D (measured: thumb reach 1.57 vs 1.27, index curled in both,
+ * fingertip gap 0.04 vs 0.07), and a fist must never be read as "shrink to the
+ * minimum". The cost is range: near the pinched end the index curls (below a
+ * gap of about 0.66 hand-lengths on the real pinch clip), so one pinch reaches
+ * roughly a third of the starting size and then lets go; further means
+ * re-arming. A fist, an open hand or leaving the frame ends it. */
 int gv_pose_can_stay_resize(const gv_frame *f, float aspect, const gv_pose_limits *lim);
 
 /* Which way the hand is turned, as one signed number: the 2D cross product of

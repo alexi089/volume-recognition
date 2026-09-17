@@ -299,7 +299,7 @@ extern const gv_gesture gv_gesture_resize;   /* kind GV_KIND_RESIZE */
 ```
 `k_gestures` becomes `{ &gv_gesture_volume, &gv_gesture_resize }` (order is irrelevant: Task 4 proves the arm poses are disjoint). `gv_update` reports `out.scale = ctx->reported_scale` when the active kind is resize, else 1.0.
 
-- [ ] **Step 1: Failing tests** `test_resize.c`. It copies `session`, `frame_xy`, `hold`, `arm`, `aligned_to` from `test_gesture.c` (a test file stands alone) and adds a helper that sets the fingertip gap of the pinch-ready fixture by moving the thumb tip along the thumb-tip to index-tip line:
+- [x] **Step 1: Failing tests** `test_resize.c`. It copies `session`, `frame_xy`, `hold`, `arm`, `aligned_to` from `test_gesture.c` (a test file stands alone) and adds a helper that sets the fingertip gap of the pinch-ready fixture by moving the thumb tip along the thumb-tip to index-tip line:
 
 ```c
 static gv_frame with_gap(const gv_frame *src, float aspect, float factor)   /* 1.0 = as recorded */
@@ -321,11 +321,22 @@ Tests (each `start_real`, fixture `fixture_real_pinch_open`, 30 fps):
   7. `a_pinched_start_does_not_arm`: `fixture_real_pinch_closed` for 1 s -> never ARMED.
   8. `volume_and_resize_do_not_cross`: arm volume with `fixture_real_tight_two`, then show the pinch-ready hand aligned to it for 1 s -> stays `GV_KIND_VOLUME` until release; and the reverse.
   9. `a_wobbling_gap_does_not_chatter`: +/-0.4% gap wobble for 2 s -> at most 1 change.
-- [ ] **Step 2:** Stub `gv_gesture_resize` (`can_arm` returns 0); run; expected: tests 1-6, 8 FAIL.
-- [ ] **Step 3: Implement.** `on_armed`: reset `gap_filter`, `gap_at_arm = gv_filter_apply(&gap_filter, gv_pinch_gap(f, aspect), t)`, `scale_target = reported_scale = 1.0f`. `on_frame`: `gap = filter(gv_pinch_gap)`; `target = clamp(gap / gap_at_arm, scale_min, scale_max)`; slew in log space: `allow = scale_max_slew * min(t - slew_t, GV_SLEW_MAX_CREDIT_SEC)` octaves, `want = log2f(target / reported_scale)`, clamp `want` to `[-allow, allow]`, `target = reported_scale * exp2f(want)`; `slew_t = t`; report when `fabsf(target / reported_scale - 1.0f) >= scale_dead_band` or when `target` is exactly `scale_min` / `scale_max` and differs from `reported_scale` (the same end-of-range bypass volume has, for the same reason). `gap_at_arm` is guaranteed `>= pinch_gap_min > 0` by the arm pose; assert it with a guard that refuses to arm (`on_armed` sets a flag that `gv_update` turns into `go_idle`) if the filtered value is below `TINY`.
-- [ ] **Step 4:** All tests pass; `make -C core test` all green. Mutation-check: remove the log-space slew; remove the credit cap; invert the ratio; remove the end-of-range bypass.
-- [ ] **Step 5:** Mirror the four config fields in `bridge.Config`. **Commit** `feat(core): the resize gesture: fingertip gap to a rate-limited scale`.
+- [x] **Step 2:** Stub `gv_gesture_resize` (`can_arm` returns 0); run; expected: tests 1-6, 8 FAIL.
+- [x] **Step 3: Implement.** `on_armed`: reset `gap_filter`, `gap_at_arm = gv_filter_apply(&gap_filter, gv_pinch_gap(f, aspect), t)`, `scale_target = reported_scale = 1.0f`. `on_frame`: `gap = filter(gv_pinch_gap)`; `target = clamp(gap / gap_at_arm, scale_min, scale_max)`; slew in log space: `allow = scale_max_slew * min(t - slew_t, GV_SLEW_MAX_CREDIT_SEC)` octaves, `want = log2f(target / reported_scale)`, clamp `want` to `[-allow, allow]`, `target = reported_scale * exp2f(want)`; `slew_t = t`; report when `fabsf(target / reported_scale - 1.0f) >= scale_dead_band` or when `target` is exactly `scale_min` / `scale_max` and differs from `reported_scale` (the same end-of-range bypass volume has, for the same reason). `gap_at_arm` is guaranteed `>= pinch_gap_min > 0` by the arm pose; assert it with a guard that refuses to arm (`on_armed` sets a flag that `gv_update` turns into `go_idle`) if the filtered value is below `TINY`.
+- [x] **Step 4:** All tests pass; `make -C core test` all green. Mutation-check: remove the log-space slew; remove the credit cap; invert the ratio; remove the end-of-range bypass.
+- [x] **Step 5:** Mirror the four config fields in `bridge.Config`. **Commit** `feat(core): the resize gesture: fingertip gap to a rate-limited scale`.
 
+
+**As built (2026-09-17). The steps above are the plan as approved; these are the departures, each forced by a measurement. The spec's "What building it changed" has the numbers.**
+
+- The `with_gap` helper was dropped: moving only the thumb tip bends the thumb into a different pose. The tests blend between two real frames instead (`core/tests/pinch_motion.h`: `aligned_to`, `pinch(k)`), shared with `test_step.c`.
+- Test 6 as written could not pass: the recorded fist keeps the thumb "out" and is nearly the same shape as a full pinch, so it did not release and shrank the window to 0.51x. Two changes follow. `gv_pose_can_stay_resize` requires the index not curled. `gv_gesture` gains an optional `on_release(ctx, pose_ended)`; resize uses it to end on the scale from `release_rollback_sec` (0.3, a new `gv_config` field, last) before its last good frame, reported as one final `changed` frame with `kind` RESIZE while `state` is already IDLE. `gv_ctx` gains a 32-entry ring buffer of reported scales, `last_hand_t` and `last_hand_before_t`. Consumers (Task 8's window backend) must apply a `changed` RESIZE frame even when the state is IDLE, and release the window after it.
+- `fixture_pointing_up` armed the resize (caught by `other_hand_shapes_moving_across_the_frame_do_nothing`). `gv_thumb_clearance` and `gv_pose_limits.thumb_clear_min` (0.62, last pose field) were added to the ARM pose only.
+- `pinch_gap_min` must be positive (validated), which is what makes the division by `gap_at_arm` safe; the flag-and-go-idle guard in Step 3 was not needed.
+- `gv_step` writes the volume only for `GV_KIND_VOLUME` changes (test: `a_resize_never_writes_the_volume`). This was pulled forward from Task 8 because without it a resize would have written the volume as soon as it existed.
+- `bridge.Config` mirrors five fields, not four, and `bridge.PoseLimits` one more; `test_bridge.py` pins the last field of each by value.
+- Mutation check: 25 mutants over the slew, clamps, dead-band, rollback, release plumbing, stay pose and clearance; 7 survived the first run (upward slew, log versus linear, rollback depth, history reset, ring and pinky in the clearance, two validations), tests were added, all 25 are killed.
+- Known and not fixed here: on the blind-recorded pinch clip every pinch is a 0.2 s snap to touching, which this design treats as closing the hand (net change nil). Whether a watched pinch is slow enough is for Task 10's live check.
 ---
 
 ### Task 6: Window geometry (pure)

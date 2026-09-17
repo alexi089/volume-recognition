@@ -50,7 +50,9 @@ gv_config gv_default_config(void)
                                .thumb_extend_reach = 1.05f, .thumb_extend_straight = 0.67f,
                                .thumb_curl_reach = 0.55f, .thumb_curl_straight = 0.45f,
                                /* half the smallest gap seen in the held pinch-ready pose */
-                               .pinch_gap_min = 0.73f },
+                               .pinch_gap_min = 0.73f,
+                               /* midway between 0.28 (resting, 95th pct) and 0.97 (held out, 5th) */
+                               .thumb_clear_min = 0.62f },
         .arm_hold_sec      = 0.25f,
         /* 250 ms is about seven frames at the 27 fps the camera loop manages;
          * the first live session saw frame gaps of 75 ms at the 99th percentile. */
@@ -86,6 +88,14 @@ gv_config gv_default_config(void)
         .filter_min_cutoff = 1.0f,
         .filter_beta       = 4.0f,
         .filter_d_cutoff   = 1.0f,
+        .scale_min         = 0.25f,
+        .scale_max         = 4.0f,
+        .scale_dead_band   = 0.01f,
+        /* One octave a second: a window may at most double or halve in a
+         * second, however wild the fingertip tracking gets. */
+        .scale_max_slew    = 1.0f,
+        /* A hand closes in 0.1 - 0.2 s; 0.3 s reaches back to before it started. */
+        .release_rollback_sec = 0.3f,
     };
     return cfg;
 }
@@ -109,7 +119,8 @@ static int config_is_valid(const gv_config *c)
                   p->thumb_curl_reach > 0.0f && p->thumb_curl_straight > 0.0f &&
                   p->thumb_curl_reach <= p->thumb_extend_reach &&
                   p->thumb_curl_straight <= p->thumb_extend_straight &&
-                  p->pinch_gap_min >= 0.0f && isfinite(p->pinch_gap_min);
+                  p->pinch_gap_min > 0.0f && isfinite(p->pinch_gap_min) && /* the resize divides by it */
+                  p->thumb_clear_min >= 0.0f && isfinite(p->thumb_clear_min);
     /* the scale gate has to let an unchanged hand (ratio 1.0) through */
     int gate_ok = c->gate_scale_min > 0.0f && c->gate_scale_min <= 1.0f &&
                   c->gate_scale_max >= 1.0f && isfinite(c->gate_scale_max) &&
@@ -121,8 +132,14 @@ static int config_is_valid(const gv_config *c)
                   /* a margin of half the frame or more would make every hand "at the edge" */
                   c->edge_margin >= 0.0f && c->edge_margin < 0.5f &&
                   c->edge_rate >= 0.0f && isfinite(c->edge_rate);
+    /* the scale range has to contain 1.0, the scale at the moment of arming */
+    int scale_ok = c->scale_min > 0.0f && c->scale_min <= 1.0f &&
+                   c->scale_max >= 1.0f && isfinite(c->scale_max) &&
+                   c->scale_dead_band >= 0.0f && isfinite(c->scale_dead_band) &&
+                   c->scale_max_slew > 0.0f && isfinite(c->scale_max_slew) &&
+                   c->release_rollback_sec >= 0.0f && isfinite(c->release_rollback_sec);
 
-    return pose_ok && gate_ok &&
+    return pose_ok && gate_ok && scale_ok &&
            c->aspect > 0.0f && isfinite(c->aspect) &&
            c->arm_hold_sec >= 0.0f && isfinite(c->arm_hold_sec) &&
            c->release_grace_sec >= 0.0f && isfinite(c->release_grace_sec) &&
@@ -150,6 +167,8 @@ gv_ctx *gv_create(const gv_config *cfg)
     gv_filter_init(&ctx->x_filter, ctx->cfg.filter_min_cutoff, ctx->cfg.filter_beta,
                    ctx->cfg.filter_d_cutoff);
     ctx->y_filter = ctx->x_filter; /* same parameters; struct assignment copies them */
+    ctx->gap_filter = ctx->x_filter;
+    ctx->reported_scale = 1.0f;
     return ctx;
 }
 
@@ -177,6 +196,7 @@ void gv_set_current_volume(gv_ctx *ctx, float volume)
  * array of pointers to const structs: adding a gesture is one line here. */
 static const gv_gesture *const k_gestures[] = {
     &gv_gesture_volume,
+    &gv_gesture_resize,
 };
 #define GESTURE_COUNT ((int)(sizeof k_gestures / sizeof k_gestures[0]))
 
@@ -265,6 +285,12 @@ static gv_kind active_kind(const gv_ctx *ctx)
     return ctx->active != NULL ? ctx->active->kind : GV_KIND_NONE;
 }
 
+/* `scale` belongs to the resize gesture; for anything else it reads 1. */
+static float active_scale(const gv_ctx *ctx)
+{
+    return active_kind(ctx) == GV_KIND_RESIZE ? ctx->reported_scale : 1.0f;
+}
+
 gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
 {
     const gv_config *cfg = &ctx->cfg;
@@ -275,12 +301,21 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
      * cannot be placed in the sequence at all, so it is dropped whole: state
      * and volume are reported as they were. */
     if (!isfinite(t)) {
-        gv_output unchanged = { ctx->state, ctx->reported_volume, 0, ctx->axis, active_kind(ctx), 1.0f };
+        gv_output unchanged = { ctx->state, ctx->reported_volume, 0, ctx->axis, active_kind(ctx), active_scale(ctx) };
         return unchanged;
     }
 
     const int usable = frame_is_usable(frame);
     float raw_x = 0.0f, raw_y = 0.0f;
+    /* Remember when a hand was last seen BEFORE this frame, then note this one. */
+    ctx->last_hand_before_t = ctx->last_hand_t;
+    if (usable)
+        ctx->last_hand_t = t;
+
+    /* A gesture that ends on this frame may have a last word (see on_release). */
+    int final_changed = 0;
+    gv_kind final_kind = GV_KIND_NONE;
+    float final_scale = 1.0f;
 
     /* Which frames count as "the gesture is still going" depends on the state:
      * the strict arm pose until armed, then the lenient stay pose plus the
@@ -305,6 +340,18 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
      * older than the grace period, whatever we were tracking is stale, even if
      * this frame happens to be good again. */
     if (ctx->state != GV_IDLE && t - ctx->last_pose_t > (double)cfg->release_grace_sec) {
+        if (ctx->state == GV_ARMED && ctx->active->on_release != NULL) {
+            /* The hand was seen after the last good frame: it changed shape.
+             * Otherwise it just was not there. (This frame's own hand does not
+             * count: last_hand_t was set above, so compare against the frame
+             * before by asking whether ANY hand came after the last pose.) */
+            int pose_ended = ctx->last_hand_before_t > ctx->last_pose_t;
+            if (ctx->active->on_release(ctx, pose_ended)) {
+                final_changed = 1;
+                final_kind = ctx->active->kind;
+                final_scale = ctx->reported_scale;
+            }
+        }
         go_idle(ctx);
         /* Having just let go, this frame is judged as a fresh start. */
         good = usable && find_arming_gesture(ctx, frame) != NULL;
@@ -355,6 +402,11 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
         }
     }
 
-    gv_output out = { ctx->state, ctx->reported_volume, changed, ctx->axis, active_kind(ctx), 1.0f };
+    gv_output out = { ctx->state, ctx->reported_volume, changed, ctx->axis, active_kind(ctx), active_scale(ctx) };
+    if (final_changed) { /* the ended gesture's last word takes this frame's kind, scale and changed */
+        out.changed = 1;
+        out.kind = final_kind;
+        out.scale = final_scale;
+    }
     return out;
 }

@@ -1,6 +1,7 @@
 #include "pose.h"
 
 #include <math.h>
+#include <stddef.h> /* size_t */
 
 /* Distance between two landmarks in frame heights (see pose.h on aspect).
  * Taking `const gv_point *` rather than `gv_point` avoids copying 12 bytes per
@@ -121,6 +122,27 @@ float gv_pinch_gap(const gv_frame *f, float aspect)
     return dist(&f->lm[GV_THUMB_TIP], &f->lm[GV_INDEX_TIP], aspect) / scale;
 }
 
+float gv_thumb_clearance(const gv_frame *f, float aspect)
+{
+    /* The joints a resting thumb lies on. The knuckles (MCP) are left out: they
+     * sit in the palm, close to the thumb's own base whatever the thumb does. */
+    static const int on_the_fist[] = {
+        GV_MIDDLE_PIP, GV_MIDDLE_DIP, GV_MIDDLE_TIP,
+        GV_RING_PIP,   GV_RING_DIP,   GV_RING_TIP,
+        GV_PINKY_PIP,  GV_PINKY_DIP,  GV_PINKY_TIP,
+    };
+    float scale = gv_hand_scale(f, aspect);
+    if (scale < TINY)
+        return 0.0f;
+    float nearest = dist(&f->lm[GV_THUMB_TIP], &f->lm[on_the_fist[0]], aspect);
+    for (size_t i = 1; i < sizeof on_the_fist / sizeof on_the_fist[0]; i++) {
+        float d = dist(&f->lm[GV_THUMB_TIP], &f->lm[on_the_fist[i]], aspect);
+        if (d < nearest)
+            nearest = d;
+    }
+    return nearest / scale;
+}
+
 int gv_pose_can_arm_resize(const gv_frame *f, float aspect, const gv_pose_limits *lim)
 {
     if (!f->present)
@@ -130,7 +152,8 @@ int gv_pose_can_arm_resize(const gv_frame *f, float aspect, const gv_pose_limits
            !gv_finger_is_extended(f, GV_FINGER_MIDDLE, aspect, lim) &&
            !gv_finger_is_extended(f, GV_FINGER_RING,   aspect, lim) &&
            !gv_finger_is_extended(f, GV_FINGER_PINKY,  aspect, lim) &&
-            gv_pinch_gap(f, aspect) >= lim->pinch_gap_min;
+            gv_pinch_gap(f, aspect) >= lim->pinch_gap_min &&
+            gv_thumb_clearance(f, aspect) >= lim->thumb_clear_min;
 }
 
 int gv_pose_can_stay_resize(const gv_frame *f, float aspect, const gv_pose_limits *lim)
@@ -138,6 +161,7 @@ int gv_pose_can_stay_resize(const gv_frame *f, float aspect, const gv_pose_limit
     if (!f->present)
         return 0;
     return !gv_thumb_is_in(f, aspect, lim) &&
+           !gv_finger_is_curled(f, GV_FINGER_INDEX, aspect, lim) &&
            !gv_finger_is_extended(f, GV_FINGER_MIDDLE, aspect, lim);
 }
 

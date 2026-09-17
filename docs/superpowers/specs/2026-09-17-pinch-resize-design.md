@@ -1,6 +1,9 @@
 # Pinch to resize the front window: design
 
-Date: 2026-09-17. Status: approved by the owner; not built. First gesture of
+Date: 2026-09-17. Status: approved by the owner; the recogniser half is built
+(gesture definitions, resize gesture), the window half is not. Sections marked
+"measured" were revised from real clips after approval; the revisions narrow the
+gesture's range and are listed under "What building it changed". First gesture of
 iteration 2 (the four-finger swipe follows and is out of scope here).
 Supersedes the pinch half of `2026-09-17-iteration-2-gestures-brief.md`.
 
@@ -59,8 +62,13 @@ typedef struct {
     int  (*can_stay)(const gv_frame *, const gv_config *);
     void (*on_armed)(gv_ctx *, const gv_frame *);        /* capture anchors */
     void (*on_frame)(gv_ctx *, const gv_frame *, double dt, gv_output *);
+    int  (*on_release)(gv_ctx *, int pose_ended);        /* optional: a last word */
 } gv_gesture;
 ```
+
+(As built the hooks also take the filtered palm position and the time, there is
+an `on_idle` reset hook, and `on_frame` returns `changed`; `gesture_internal.h`
+is the reference.)
 
 - Volume moves into `gestures/volume.c` unchanged in behaviour. This refactor
   lands first, alone, with every existing check green.
@@ -85,8 +93,20 @@ typedef struct {
 - **Arming needs a gap of at least 0.73 hand-lengths (measured).** Touching fingertips
   hide each other, which is where tracking is worst, and a tiny starting gap
   makes the ratio explode.
-- **Stay pose:** thumb not in, and middle finger not extended (see "Thumb
-  measurements": pinching curls the index, so the index cannot be part of it).
+- **Arming also needs the thumb tip clear of the curled fingers** (at least 0.62
+  hand-lengths from the nearest joint of the middle, ring and pinky; measured).
+  A thumb resting on the fist while pointing is as long and straight as one
+  held out; only where its tip is tells them apart.
+- **Stay pose (measured, revised):** thumb not in, index not curled, middle not
+  extended. A full pinch and a fist are nearly the same shape in 2D, and a fist
+  must never mean "shrink to the minimum"; see "What building it changed".
+- **Release rolls back (added):** when the gesture ends because the hand changed
+  shape while still in view, it ends on the scale it reported 0.3 s
+  (`release_rollback_sec`) before its last good frame, sent as one final
+  `changed` frame with `kind` still RESIZE. Closing the hand is how every
+  gesture here ends, and on the way to a fist the fingertips pass through every
+  smaller gap. A hand that leaves the frame rolls nothing back. A resize shorter
+  than the rollback ends at scale 1.0: nothing happened.
 - **The thumb rule was set from a measurement clip**, the way the finger
   thresholds were; see "Thumb measurements" below.
 
@@ -114,18 +134,18 @@ What they decided:
   1.55) and straightness above 0.67 (midway between 0.44 and 0.90). **Thumb in**
   = reach below 0.55 OR straightness below 0.45.
 - **Pinching curls the index finger**: its reach falls to 0.57 at the pinched
-  end, which the finger rule calls curled. A stay pose that needs the index
-  "not curled" would release the resize exactly when the user pinches. The
-  thumb stays out through the whole pinch (reach never below 1.55). So the stay
-  pose is: thumb not in, AND middle finger not extended. Tucking the thumb
-  (a fist), opening the hand, or leaving the frame releases.
+  end, which the finger rule calls curled. The first design therefore left the
+  index out of the stay pose. That did not survive the fist fixture; see "What
+  building it changed".
 - **Minimum gap to arm: 0.73 hand-lengths** (half the 5th percentile of the held
   pose).
 - **A hand only opens so far.** Armed at the typical 1.6 hand-lengths the gap
-  can reach about 2.06, a scale of 1.3x; pinching goes down to the 0.25x clamp.
-  To grow a window a lot, arm with the fingers closer together (down to 0.73)
-  or re-arm. This is a property of hands, not a tuning problem; the README says
-  so.
+  can reach about 2.06, a scale of 1.3x. Arming with the fingers closer together
+  helps less than hoped: on the real clip the arm pose holds on 14 of 18 frames
+  at a gap of 1.2 - 1.5 and on 2 of 10 at 0.9 - 1.2 (the index stops reading as
+  extended), so about 1.7x is the most one spread gives. Growing a window a lot
+  means re-arming. This is a property of hands, not a tuning problem; the README
+  says so.
 - The third clip was meant to be the volume pose but shows the middle finger
   curled, i.e. a second pinch-ready clip. Not needed: the recorded sessions hold
   ample volume-pose data, and volume and resize are separated by the middle
@@ -133,6 +153,46 @@ What they decided:
 - Pointing at the screen foreshortens the hand and the landmarks get unreliable
   (middle reach up to 4.5). The pose rules only ever see such frames as
   negatives, which is the safe direction.
+
+### What building it changed (2026-09-17, measured)
+
+Bad news first: the gesture is narrower than the approved design said.
+
+- **A fist reads as a full pinch.** The recorded fist keeps its thumb "out"
+  (reach 1.27, straightness 0.81) with the index curled and a fingertip gap of
+  0.07; the full pinch has 1.57 / 0.95, index curled, gap 0.04. With the index
+  left out of the stay pose, closing the hand shrank the window to 0.51x and
+  held it. Hence: index not curled rejoins the stay pose, and release rolls
+  back.
+- **The cost is range.** Replayed on the real pinch-and-spread clip, the stay
+  pose holds on every frame with a gap of 0.9 or more, 10 of 12 at 0.6 - 0.9,
+  6 of 26 at 0.3 - 0.6 and 2 of 86 below 0.3. From a typical 1.6 start one pinch
+  reaches roughly 0.4x - 0.55x, not the 0.25x clamp; further means re-arming.
+- **A snap pinch does nothing, by construction.** In that clip each pinch goes
+  from a gap of 1.8 to 0.2 in about 0.2 s, as fast as a hand closes. The scale
+  (limited to 1 octave per second) reaches 0.85 - 0.91, the pose ends, and the
+  rollback returns it to where it was: five sessions, net change nil. The clip
+  was recorded with no window responding, so it says nothing about how a user
+  pinches with feedback. That a deliberate, watched pinch works is a hypothesis
+  until the live check. If it fails there, the candidates are a faster slew
+  limit, a shorter rollback, or a measure that separates fist from pinch, which
+  needs a recording of both from the same starting pose.
+- **Pointing with a resting thumb armed the resize.** The thumb limits came from
+  a clip of pointing AT the camera (hand foreshortened, thumb reach 0.12 -
+  0.53). Seen from the front, the stock pointing-up photo has thumb reach 1.54,
+  straightness 0.93 and a gap of 1.02: every rule said yes. Thumb clearance
+  separates them: 0.10 / 0.18 / 0.28 on the pointing clip and 0.24 on the photo,
+  against 1.00 / 1.21 / 1.33 and 0.97 / 1.20 / 1.40 on the two held clips.
+  Threshold 0.62 by the midpoint rule. Frontal-view negative evidence is that
+  one photo. With the rule the held clips still arm on 300 of 300 and 295 of
+  299 frames, and the pointing clip on 0 of 300.
+- **False arming on recordings that contain no resize:** five volume-only
+  sessions and seven scripted clips, about 45,000 frames (25 minutes): 6 resize
+  sessions, 2.3 s in total, scale between 0.98 and 1.12. The rollback undoes
+  the short ones, but a window would visibly twitch first. Volume's own numbers
+  on those recordings are unchanged.
+- `gv_step` writes the volume only when the change is volume's; `changed`
+  belongs to whichever gesture is armed.
 
 ### The window backend (`window_macos.c`, behind `window.h`)
 
@@ -186,7 +246,12 @@ glyph and a percentage for that gesture.
 ## Risks and unknowns
 
 - Fingertip gap is noisier than palm position, and the two tips occlude each
-  other near the pinched end. Unmeasured until the clip exists.
+  other near the pinched end. The stay pose now lets go before that region.
+- Whether a pinch made while watching the window is slow enough to register is
+  untested (see "What building it changed").
+- The rollback delays nothing but does mean the final size is decided 0.3 s
+  before the hand visibly lets go; a user who adjusts in that last 0.3 s and
+  then closes the hand loses the adjustment.
 - "Frontmost window" can surprise; the overlay and HUD name the target.
 - Accessibility is granted to the build session's host. Launched from VS Code's
   own terminal or debugger, the grant belongs to VS Code and may be missing.

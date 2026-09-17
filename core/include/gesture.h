@@ -96,6 +96,11 @@ typedef struct {
      * resize. Touching fingertips hide each other, where tracking is worst, and
      * the resize scales by gap / gap-at-arming, so a tiny start would explode. */
     float pinch_gap_min;
+    /* Least distance, in hand-lengths, from the thumb tip to the curled middle,
+     * ring and pinky fingers that may arm a resize. A thumb resting on the fist
+     * while pointing is as long and straight as one held out; where its tip is
+     * tells them apart (measured: 0.28 or less resting, 0.97 or more held out). */
+    float thumb_clear_min;
 } gv_pose_limits;
 
 typedef struct {
@@ -135,6 +140,16 @@ typedef struct {
     float filter_min_cutoff; /* One Euro filter parameters, see filter.h */
     float filter_beta;
     float filter_d_cutoff;
+
+    /* The resize gesture: the window scales by fingertip gap / gap at arming. */
+    float scale_min;         /* clamp, relative to the size at arming ...       */
+    float scale_max;         /* ... must include 1.0                            */
+    float scale_dead_band;   /* smallest relative change worth reporting        */
+    float scale_max_slew;    /* fastest the scale may move, in octaves (doublings) per second */
+    /* When a resize ends because the hand changed shape (not because it left),
+     * the last moments are the closing motion, which drags the gap down. The
+     * gesture ends at the scale it reported this long before its last good frame. */
+    float release_rollback_sec;
 } gv_config;
 
 /* The tuned defaults. Start from these and override single fields. */
@@ -151,7 +166,8 @@ typedef struct gv_ctx gv_ctx;
 
 /* cfg may be NULL for the defaults. Returns NULL if the config is invalid (a
  * non-finite field; a non-positive aspect, pose limit, gate, slew or filter cutoff;
- * a negative time, dead-band, axis lock distance or pinch gap; an axis dominance below
+ * a negative time, dead-band, axis lock distance or pinch gap; a scale range
+ * that does not contain 1.0, or a non-positive scale slew; an axis dominance below
  * 1; accel_speed_hi not above accel_speed_lo; an edge margin outside
  * [0, 0.5) or a negative edge rate; curl limits above the extend limits; or a scale gate that excludes 1.0)
  * or if memory cannot be allocated. */
