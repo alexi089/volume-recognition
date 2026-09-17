@@ -2,6 +2,7 @@
 CC      := clang
 CFLAGS  := -std=c11 -Wall -Wextra -Werror -Wpedantic -g -Iinclude -Isrc
 AUDIO   := -framework CoreAudio -framework AudioToolbox -framework CoreFoundation
+AX      := -framework ApplicationServices
 BUILD   := build
 
 # Tests are built with the sanitizers on. AddressSanitizer catches out-of-bounds
@@ -21,13 +22,16 @@ TEST_BINS := $(addprefix $(BUILD)/,$(TESTS))
 
 .PHONY: all test replay clean
 
-all: $(BUILD)/vol $(BUILD)/libgesture.dylib
+all: $(BUILD)/vol $(BUILD)/win $(BUILD)/libgesture.dylib
 
 $(BUILD):
 	mkdir -p $(BUILD)
 
 $(BUILD)/vol: tools/vol.c src/volume_macos.c $(HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) tools/vol.c src/volume_macos.c $(AUDIO) -o $@
+
+$(BUILD)/win: tools/win.c src/window_macos.c src/window_math.c $(HDRS) | $(BUILD)
+	$(CC) $(CFLAGS) tools/win.c src/window_macos.c src/window_math.c $(AX) -lm -o $@
 
 $(BUILD)/test_filter: tests/test_filter.c src/filter.c $(HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) tests/test_filter.c src/filter.c -lm -o $@
@@ -48,10 +52,10 @@ $(BUILD)/test_window_math: tests/test_window_math.c src/window_math.c $(HDRS) | 
 
 # The shared library the Python side loads with ctypes. No sanitizers here: an
 # ASan-instrumented dylib cannot be loaded into an uninstrumented Python.
-LIB_SRC := $(CORE_SRC) src/step.c src/step_system.c src/volume_macos.c
+LIB_SRC := $(CORE_SRC) src/step.c src/step_system.c src/volume_macos.c src/window_math.c src/window_macos.c
 
 $(BUILD)/libgesture.dylib: $(LIB_SRC) $(HDRS) | $(BUILD)
-	$(CC) $(CFLAGS) -O2 -dynamiclib $(LIB_SRC) $(AUDIO) -lm -o $@
+	$(CC) $(CFLAGS) -O2 -dynamiclib $(LIB_SRC) $(AUDIO) $(AX) -lm -o $@
 
 # test_step links step.c but NOT volume_macos.c: it supplies a fake backend,
 # and gv_system_volume / gv_step_system live in step_system.c for that reason.

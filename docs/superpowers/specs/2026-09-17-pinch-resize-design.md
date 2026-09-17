@@ -196,6 +196,21 @@ Bad news first: the gesture is narrower than the approved design said.
 
 ### The window backend (`window_macos.c`, behind `window.h`)
 
+- **Built and measured (2026-09-17):** `win scale 0.9` on Terminal went 1320x693
+  -> 1187x623 (Terminal snaps to whole characters; that is WIN_OK, not an
+  error), centre kept to half a point, restored exactly. One `win_apply` (two
+  writes and the read-back) took 13.8 ms mean, 23.8 ms worst over 60 calls on a
+  2144x1387 Chrome window. `leaks` reports none over acquire and release. NOT
+  verified: a fixed-size window (WIN_ERR_NOT_RESIZABLE) and a missing
+  Accessibility grant (WIN_ERR_NOT_TRUSTED); both need the owner's hands.
+- **The menu bar is measured, not assumed.** It is a window at the main-menu
+  level in the window list, one per display: 37 pt on the notched built-in
+  display, 24 pt on the ultrawide. (The plan's "25 pt on the main display only"
+  would have been wrong on both.) The Dock cannot be measured the same way: its
+  window covers the whole display. A resized window may end up partly behind
+  the Dock.
+- Accessibility calls are given 0.25 s to answer (the default is 6 s): a hung
+  app must not freeze the camera loop.
 - **Acquire at arming:** the frontmost layer-0 on-screen window whose owner is
   not this process (that excludes the camera preview; the HUD is not layer 0).
   Its element, original size and centre are kept for the whole gesture, even if
@@ -257,7 +272,11 @@ glyph and a percentage for that gesture.
   own terminal or debugger, the grant belongs to VS Code and may be missing.
 - Some apps enforce their own minimum sizes or aspect ratios; the read-back
   check will report those as ignored writes until handled specifically.
-- Rate of Accessibility writes (up to ~30 per second) is unmeasured.
+- One window write costs about 14 ms (measured), inside a loop whose frame
+  budget is about 33 ms and which already spends most of that on MediaPipe.
+  While a resize is moving, the frame rate will drop; by how much is for the
+  live check. If it matters, the fix is to apply at most every other frame, or
+  from a second thread.
 - Iteration 1's known failing negative (touching the face arms the volume
   slider) is unfixed, and more gestures mean more ways to false-trigger;
   negative recordings matter more now, not less.

@@ -164,6 +164,46 @@ static void every_result_is_on_screen(void)
     }
 }
 
+/* Measured on the owner's desk: a notched built-in display with a 37 pt bar,
+ * and an ultrawide above and to the right of it with a 24 pt bar. */
+static const win_rect BUILT_IN  = { 0.0, 0.0, 1728.0, 1117.0 };
+static const win_rect ULTRAWIDE = { 1728.0, -611.0, 5120.0, 1440.0 };
+static const win_rect BUILT_IN_BAR  = { 0.0, 0.0, 1728.0, 37.0 };
+static const win_rect ULTRAWIDE_BAR = { 1728.0, -611.0, 5120.0, 24.0 };
+
+static void a_displays_own_menu_bar_is_cut_off_the_top(void)
+{
+    win_rect a = { 0.0, 37.0, 1728.0, 1080.0 };
+    win_rect b = { 1728.0, -587.0, 5120.0, 1416.0 };
+    check_rect(win_below_menu_bar(BUILT_IN, BUILT_IN_BAR), a);
+    check_rect(win_below_menu_bar(ULTRAWIDE, ULTRAWIDE_BAR), b);
+}
+
+static void another_displays_menu_bar_is_ignored(void)
+{
+    check_rect(win_below_menu_bar(BUILT_IN, ULTRAWIDE_BAR), BUILT_IN);
+    check_rect(win_below_menu_bar(ULTRAWIDE, BUILT_IN_BAR), ULTRAWIDE);
+
+    /* side by side with their tops level: only x tells the two bars apart */
+    win_rect right = { 1728.0, 0.0, 1728.0, 1117.0 }, right_bar = { 1728.0, 0.0, 1728.0, 24.0 };
+    check_rect(win_below_menu_bar(BUILT_IN, right_bar), BUILT_IN);
+    check_rect(win_below_menu_bar(right, BUILT_IN_BAR), right);
+}
+
+static void a_rectangle_that_is_not_a_bar_along_the_top_is_ignored(void)
+{
+    win_rect hidden = { 0.0, 0.0, 0.0, 0.0 };              /* menu bar hidden: nothing found */
+    win_rect lower  = { 0.0, 500.0, 1728.0, 37.0 };        /* on the display, not at its top */
+    win_rect whole  = { 0.0, 0.0, 1728.0, 1117.0 };        /* the Dock's window covers the whole display */
+    win_rect stub   = { 1325.0, 0.0, 32.0, 37.0 };         /* a status item: at the top, but not a bar */
+    win_rect corner = { 0.0, 0.0, 32.0, 37.0 };            /* one in the very corner: only its width gives it away */
+    check_rect(win_below_menu_bar(BUILT_IN, hidden), BUILT_IN);
+    check_rect(win_below_menu_bar(BUILT_IN, lower), BUILT_IN);
+    check_rect(win_below_menu_bar(BUILT_IN, whole), BUILT_IN);
+    check_rect(win_below_menu_bar(BUILT_IN, stub), BUILT_IN);
+    check_rect(win_below_menu_bar(BUILT_IN, corner), BUILT_IN);
+}
+
 int main(void)
 {
     fprintf(stderr, "test_window_math\n");
@@ -180,5 +220,8 @@ int main(void)
     RUN(the_screen_beats_the_minimum);
     RUN(a_nonsense_scale_changes_nothing);
     RUN(every_result_is_on_screen);
+    RUN(a_displays_own_menu_bar_is_cut_off_the_top);
+    RUN(another_displays_menu_bar_is_ignored);
+    RUN(a_rectangle_that_is_not_a_bar_along_the_top_is_ignored);
     return TEST_SUMMARY();
 }

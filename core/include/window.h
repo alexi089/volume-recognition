@@ -7,6 +7,8 @@
 #ifndef GV_WINDOW_H
 #define GV_WINDOW_H
 
+#include <stddef.h>
+
 /* A rectangle in the Accessibility API's space: points, origin at the TOP-left
  * of the main display, y growing downwards. Displays above or to the left of
  * the main one have negative coordinates. Doubles, because CGFloat is one. */
@@ -24,5 +26,65 @@ typedef struct { double x, y, w, h; } win_rect;
  * A scale that is not a positive finite number returns `original` untouched.
  */
 win_rect win_scaled_frame(win_rect original, double scale, win_rect visible, double min_w, double min_h);
+
+/*
+ * The part of `display` below a menu bar, if `bar` is this display's menu bar:
+ * a strip along its top edge. Any other rectangle (another display's bar, or
+ * an empty one when the bar is hidden) returns `display` unchanged.
+ *
+ * The bar's height is measured, not assumed: 37 pt on a notched built-in
+ * display and 24 pt on an external one, and with "Displays have separate
+ * Spaces" every display has its own.
+ */
+win_rect win_below_menu_bar(win_rect display, win_rect bar);
+
+/* --- the part that talks to macOS (window_macos.c) ----------------------- */
+
+/* The smallest a gesture may make a window. Apps enforce their own minimums on
+ * top of this; this one only stops a window shrinking to a sliver. */
+#define WIN_MIN_W 320.0
+#define WIN_MIN_H 240.0
+
+/* Same shape as vol_status: zero is success, negatives are errors. */
+typedef enum {
+    WIN_OK                 =  0,
+    WIN_ERR_NOT_TRUSTED    = -1, /* this process may not use the Accessibility API; see win_strerror */
+    WIN_ERR_NO_WINDOW      = -2, /* nothing to resize: no front window, or the one held has closed */
+    WIN_ERR_NOT_RESIZABLE  = -3, /* the front window's size cannot be set (fixed-size windows) */
+    WIN_ERR_IGNORED        = -4, /* the write reported success and the window did not change */
+    WIN_ERR_AX             = -5, /* an Accessibility call failed; see win_last_ax_error() */
+    WIN_ERR_BAD_VALUE      = -6  /* a scale that is not a positive finite number, or a NULL buffer */
+} win_status;
+
+/* Take hold of the frontmost ordinary window that does not belong to this
+ * process (which leaves out the camera preview), and remember its frame and
+ * the visible frame of its screen. The window stays the target until
+ * win_release, even if the user clicks elsewhere. Acquiring again lets go of
+ * the previous window first. */
+win_status win_acquire(void);
+
+/* Resize the held window to `scale` times the frame it had at win_acquire,
+ * about its centre, kept on its screen (win_scaled_frame). The size is read
+ * back afterwards: CoreAudio taught this project that a success code is not
+ * evidence. A window that settles on a DIFFERENT size than asked (an app's own
+ * minimum, a terminal snapping to whole characters) is WIN_OK; one that did not
+ * move at all when it should have is WIN_ERR_IGNORED. */
+win_status win_apply(float scale);
+
+/* Let go. Safe to call with nothing held. The window stays as it is. */
+void win_release(void);
+
+/* The held window's frame as last read (after win_acquire or win_apply). */
+win_status win_current_frame(win_rect *out);
+
+/* The name of the application that owns the held window, NUL-terminated. */
+win_status win_target_name(char *buf, size_t len);
+
+/* Human-readable text for a win_status. Never returns NULL. */
+const char *win_strerror(win_status s);
+
+/* The raw AXError from the most recent failing Accessibility call. One
+ * unsynchronised global, like vol_last_os_status: single thread only. */
+int win_last_ax_error(void);
 
 #endif /* GV_WINDOW_H */

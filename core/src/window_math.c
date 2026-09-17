@@ -12,6 +12,21 @@ static double clamp(double v, double lo, double hi)
     return fmin(fmax(v, lo), hi);
 }
 
+win_rect win_below_menu_bar(win_rect display, win_rect bar)
+{
+    /* Display and window-list rectangles are whole numbers of points, so these
+     * comparisons are exact; half a point of slack costs nothing. */
+    const double slack = 0.5;
+    int along_the_top = fabs(bar.x - display.x) <= slack && fabs(bar.y - display.y) <= slack;
+    int full_width    = fabs(bar.w - display.w) <= slack;
+    int a_strip       = bar.h > 0.0 && bar.h < display.h / 2.0;
+    if (!along_the_top || !full_width || !a_strip)
+        return display;
+
+    win_rect below = { display.x, display.y + bar.h, display.w, display.h - bar.h };
+    return below;
+}
+
 win_rect win_scaled_frame(win_rect original, double scale, win_rect visible, double min_w, double min_h)
 {
     if (!isfinite(scale) || scale <= 0.0)
