@@ -355,12 +355,14 @@ typedef struct { double x, y, w, h; } win_rect;   /* top-left origin, points: th
 win_rect win_scaled_frame(win_rect original, double scale, win_rect visible, double min_w, double min_h);
 ```
 
-- [ ] **Step 1: Failing tests:** scale 1 -> identical; scale 1.5 on 800x600 centred at (1000, 700) in a 2560x1440 visible frame -> 1200x900 with the same centre; scale 0.1 -> 320x240, same centre; scale 4 -> clamped to the visible size, origin at the visible origin; a window near the right edge growing -> width as asked, shifted left to fit, top unchanged unless it also overflows; NaN or non-positive scale -> the original frame unchanged; a visible frame with a negative origin (a display above or left of the primary: the owner's second display sits at y = -611) -> still correct.
-- [ ] **Step 2:** stub returns `original`; run; expected FAIL on all but the first and the NaN case.
-- [ ] **Step 3:** implement (about 25 lines; `fmin` / `fmax`; centre = origin + size / 2).
-- [ ] **Step 4:** pass; mutation-check the clamp order (clamp size before computing the origin).
-- [ ] **Step 5: Commit** `feat(core): window geometry for centred, on-screen resizing`.
+- [x] **Step 1: Failing tests:** scale 1 -> identical; scale 1.5 on 800x600 centred at (1000, 700) in a 2560x1440 visible frame -> 1200x900 with the same centre; scale 0.1 -> 320x240, same centre; scale 4 -> clamped to the visible size, origin at the visible origin; a window near the right edge growing -> width as asked, shifted left to fit, top unchanged unless it also overflows; NaN or non-positive scale -> the original frame unchanged; a visible frame with a negative origin (a display above or left of the primary: the owner's second display sits at y = -611) -> still correct.
+- [x] **Step 2:** stub returns `original`; run; expected FAIL on all but the first and the NaN case.
+- [x] **Step 3:** implement (about 25 lines; `fmin` / `fmax`; centre = origin + size / 2).
+- [x] **Step 4:** pass; mutation-check the clamp order (clamp size before computing the origin).
+- [x] **Step 5: Commit** `feat(core): window geometry for centred, on-screen resizing`.
 
+
+**As built (2026-09-17):** as planned, plus three cases the list above lacked: each side has its own floor, a screen smaller than the minimum wins over the minimum, and a sweep asserting every result lies on the screen. 158 checks; 14 mutants (clamp order, clamp precedence, each slide, each floor and ceiling, the scale guard), all killed.
 ---
 
 ### Task 7: The Accessibility backend and its CLI
