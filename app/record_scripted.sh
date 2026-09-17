@@ -25,7 +25,7 @@ CLIPS=(
 "real_slide_up|up|RAISE the volume: two fingers up, slide right (or up), close your hand. Repeat about 5 times."
 "real_slide_down|down|LOWER the volume: two fingers up, slide left (or down), close your hand. Repeat about 5 times."
 "real_typing|none|Just TYPE on the keyboard and use the trackpad, as you normally would."
-"real_nose_scratch|none|TOUCH YOUR FACE: scratch your nose, rub your eyes, fix your hair, rest your chin on your hand."
+"real_nose_scratch|none|TOUCH YOUR FACE, with EITHER hand: scratch your nose, rub your eyes, fix your hair, rest your chin on a hand."
 "real_cup_reach|none|REACH FOR THINGS: pick up a cup or your phone, drink, put it back, stretch."
 "real_waving|none|GESTURE AT THE SCREEN: wave hello, point, thumbs up, open palm, a peace sign in passing. Do NOT hold two fingers still."
 "real_talking_hands|none|TALK WITH YOUR HANDS as if you were on a video call explaining something."

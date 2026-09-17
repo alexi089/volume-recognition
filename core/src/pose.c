@@ -80,6 +80,26 @@ int gv_pose_can_stay(const gv_frame *f, float aspect, const gv_pose_limits *lim)
            !gv_finger_is_curled(f, GV_FINGER_MIDDLE, aspect, lim);
 }
 
+float gv_palm_turn(const gv_frame *f, float aspect)
+{
+    const gv_point *w = &f->lm[GV_WRIST];
+    const gv_point *i = &f->lm[GV_INDEX_MCP];
+    const gv_point *p = &f->lm[GV_PINKY_MCP];
+
+    /* Two vectors from the wrist, in undistorted units (see pose.h on aspect). */
+    float ax = (i->x - w->x) * aspect, ay = i->y - w->y;
+    float bx = (p->x - w->x) * aspect, by = p->y - w->y;
+
+    /* The z component of a x b: positive when b is anticlockwise from a, as
+     * seen on screen, negative when clockwise, zero when they line up. Its size
+     * is |a||b|sin(angle), so dividing by the hand's size squared leaves a pure
+     * number that does not change with distance from the camera. */
+    float scale = gv_hand_scale(f, aspect);
+    if (scale < TINY)
+        return 0.0f;
+    return (ax * by - ay * bx) / (scale * scale);
+}
+
 float gv_hand_scale(const gv_frame *f, float aspect)
 {
     return dist(&f->lm[GV_WRIST], &f->lm[GV_MIDDLE_MCP], aspect);

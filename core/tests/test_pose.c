@@ -194,6 +194,39 @@ static void pose_survives_distance_from_camera(void)
     CHECK(gv_pose_can_arm(&f, FIXTURE_VICTORY_ASPECT, &LIM));
 }
 
+/* Flip a hand left to right. In 2D that is what turning the same hand over
+ * looks like: the outline is the same, the thumb is on the other side. */
+static gv_frame mirrored(const gv_frame *src)
+{
+    gv_frame out = *src;
+    for (int i = 0; i < GV_NUM_LANDMARKS; i++)
+        out.lm[i].x = 1.0f - src->lm[i].x;
+    return out;
+}
+
+/* --- which way the palm faces ------------------------------------------- */
+
+static void palm_turn_is_a_size_free_rotation_free_number(void)
+{
+    const gv_frame *f = &fixture_real_tight_two;
+    float turn = gv_palm_turn(f, REAL);
+    CHECK(fabsf(turn) > 0.25f); /* a hand seen flat on is clearly one way or the other */
+
+    gv_frame small = scaled(f, 0.5f);
+    CHECK_NEAR(gv_palm_turn(&small, REAL), turn, 0.01);
+    for (int deg = -90; deg <= 90; deg += 45) {
+        gv_frame r = rotated(f, REAL, (float)deg);
+        CHECK_NEAR(gv_palm_turn(&r, REAL), turn, 0.01);
+    }
+}
+
+static void turning_the_hand_over_flips_the_sign(void)
+{
+    const gv_frame *f = &fixture_real_tight_two;
+    gv_frame over = mirrored(f);
+    CHECK_NEAR(gv_palm_turn(&over, REAL), -gv_palm_turn(f, REAL), 0.01);
+}
+
 static void hand_scale_matches_measured_value(void)
 {
     /* 0.160 was measured independently in Python on the same photo. */
@@ -262,6 +295,8 @@ int main(void)
     RUN(absent_hand_is_never_a_pose);
     RUN(pose_survives_rotation);
     RUN(pose_survives_distance_from_camera);
+    RUN(palm_turn_is_a_size_free_rotation_free_number);
+    RUN(turning_the_hand_over_flips_the_sign);
     RUN(hand_scale_matches_measured_value);
     RUN(hand_scale_follows_apparent_size);
     RUN(hand_scale_ignores_rotation_on_a_wide_frame);

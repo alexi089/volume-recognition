@@ -3,7 +3,6 @@ __pycache__/
 *.pyc
 .DS_Store
 /docs/
-.claude/
 
 # Downloaded by `make model` (7.8 MB binary, not ours to version)
 app/models/*.task

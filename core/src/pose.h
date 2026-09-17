@@ -62,6 +62,16 @@ int gv_pose_can_arm(const gv_frame *f, float aspect, const gv_pose_limits *lim);
  * on every frame is what made the first version drop out mid-slide. */
 int gv_pose_can_stay(const gv_frame *f, float aspect, const gv_pose_limits *lim);
 
+/* Which way the hand is turned, as one signed number: the 2D cross product of
+ * (index knuckle - wrist) and (pinky knuckle - wrist), divided by the hand's
+ * size squared. Its SIGN says on which side of the hand the thumb is, which
+ * for a given hand (left or right) says whether the palm or the back faces the
+ * camera; its size says how flat-on the hand is (near zero = seen edge-on).
+ * Independent of hand size, position, and rotation in the image plane.
+ * Turning the hand over, or swapping left for right, flips the sign; this
+ * function does not know which hand it is looking at. */
+float gv_palm_turn(const gv_frame *f, float aspect);
+
 /* Wrist to middle-finger knuckle, in frame heights. A stable measure of how
  * big the hand appears, used to make slider travel independent of distance
  * from the camera. */
