@@ -17,7 +17,7 @@ recording; **the reworked version has not yet been tried live.**
 | C core (filter, pose, state machine, glue, trace parser) | 229 checks across 5 suites, under ASan + UBSan; pose tests mutation-checked |
 | Photo -> MediaPipe -> ctypes -> C state machine | tested (`app/test_bridge.py`) |
 | C -> CoreAudio -> real system volume | works on built-in speakers, and on AirPods in some states; see Known limits |
-| Live camera loop (`make run`) | two live sessions. The second crashed after 8 minutes (MediaPipe GPU buffer leak); fixed by moving to the CPU delegate, soak-tested for 15,000 frames with a flat 116 MB footprint. Frame rate with the preview was 28.7 fps on the GPU delegate; **not re-measured live on CPU** |
+| Live camera loop (`make run`) | two live sessions. The second crashed after 8 minutes (MediaPipe GPU buffer leak); fixed by moving to the CPU delegate, soak-tested for 15,000 frames with a flat 116 MB footprint. Live frame rate with the preview on the CPU delegate: 29.5 fps |
 | Dropping out mid-slide | on the recording: 69 -> 32 armed sessions, median 0.9 -> 2.4 s, under one second 40 -> 9. Proxy numbers: the recording has no intent labels |
 | Tuning constants | reasoned from one recording of one hand; **not yet tuned on scripted recordings** |
 | Real negative traces (typing, nose scratch, ...) | **none yet**; the four pass/fail traces in `traces/` are synthetic |
