@@ -73,9 +73,10 @@ def main() -> int:
         want = 0.30 + (1.5 - 0.5) / 3
         check(abs(out.volume - want) < 0.02, f"1.5 hand-lengths right: 0.30 -> {out.volume:.3f} (want {want:.3f})")
         check(out.axis == bridge.AXIS_X, "the slide was taken as left/right")
+        check(out.kind == bridge.KIND_VOLUME and abs(out.scale - 1.0) < 1e-6, "a volume slide reports kind volume, scale 1")
 
         out, t = run(g, None, [0.0] * 10, t)
-        check(out.state == bridge.IDLE, "losing the hand releases")
+        check(out.state == bridge.IDLE and out.kind == bridge.KIND_NONE, "losing the hand releases, and no gesture is reported")
         check(abs(out.volume - want) < 0.02, "and the volume stays where it was left")
 
     # Up is louder. Image y grows downwards, so "up" is a negative y offset here.

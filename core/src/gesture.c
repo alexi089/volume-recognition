@@ -245,6 +245,11 @@ static int frame_is_plausible(const gv_ctx *ctx, const gv_frame *frame, float ra
     return speed <= (double)cfg->gate_max_speed;
 }
 
+static gv_kind active_kind(const gv_ctx *ctx)
+{
+    return ctx->active != NULL ? ctx->active->kind : GV_KIND_NONE;
+}
+
 gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
 {
     const gv_config *cfg = &ctx->cfg;
@@ -255,7 +260,7 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
      * cannot be placed in the sequence at all, so it is dropped whole: state
      * and volume are reported as they were. */
     if (!isfinite(t)) {
-        gv_output unchanged = { ctx->state, ctx->reported_volume, 0, ctx->axis };
+        gv_output unchanged = { ctx->state, ctx->reported_volume, 0, ctx->axis, active_kind(ctx), 1.0f };
         return unchanged;
     }
 
@@ -335,6 +340,6 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
         }
     }
 
-    gv_output out = { ctx->state, ctx->reported_volume, changed, ctx->axis };
+    gv_output out = { ctx->state, ctx->reported_volume, changed, ctx->axis, active_kind(ctx), 1.0f };
     return out;
 }

@@ -77,7 +77,7 @@ int main(int argc, char **argv)
 
     gv_config cfg = gv_default_config();
     gv_ctx *ctx = NULL;
-    gv_output out = { GV_IDLE, START_VOLUME, 0, GV_AXIS_NONE };
+    gv_output out = { GV_IDLE, START_VOLUME, 0, GV_AXIS_NONE, GV_KIND_NONE, 1.0f };
     int frames = 0, armed_frames = 0, changes = 0, line_no = 0, status = 0;
 
     durations sessions = { NULL, 0, 0 };

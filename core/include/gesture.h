@@ -58,11 +58,22 @@ typedef enum {
     GV_AXIS_Y    = 2  /* up is louder */
 } gv_axis;
 
+/* Which gesture is arming or armed. */
+typedef enum {
+    GV_KIND_NONE   = 0, /* idle */
+    GV_KIND_VOLUME = 1, /* index and middle up: a slider for the system volume */
+    GV_KIND_RESIZE = 2  /* thumb and index out: pinch to resize the front window */
+} gv_kind;
+
+/* New fields are added at the END: a field's offset is part of the contract
+ * with the Python side, and appending leaves every existing offset alone. */
 typedef struct {
     gv_state state;
     float    volume;  /* the volume the system should be at, 0..1 */
-    int      changed; /* 1 when `volume` moved enough that the caller should apply it */
+    int      changed; /* 1 when the active gesture's value moved enough that the caller should apply it */
     gv_axis  axis;
+    gv_kind  kind;
+    float    scale;   /* resize only: size relative to the moment of arming; 1.0 otherwise */
 } gv_output;
 
 /* Thresholds for judging one finger; src/pose.h explains the two measurements.

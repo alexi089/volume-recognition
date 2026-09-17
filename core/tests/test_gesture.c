@@ -220,6 +220,22 @@ static void nonsense_config_is_rejected(void)
     gv_destroy(ctx);
 }
 
+static void the_output_says_which_gesture_is_active(void)
+{
+    session s = start(0.50f);
+    hold(&s, NULL, 0.0f, 0.2);
+    CHECK(s.out.kind == GV_KIND_NONE);
+    CHECK_NEAR(s.out.scale, 1.0f, 1e-6);
+    hold(&s, &fixture_victory, 0.0f, 0.1);
+    CHECK(s.out.state == GV_ARMING && s.out.kind == GV_KIND_VOLUME);
+    arm(&s, &fixture_victory, 0.0f);
+    CHECK(s.out.kind == GV_KIND_VOLUME);
+    CHECK_NEAR(s.out.scale, 1.0f, 1e-6); /* scale belongs to resize; it is 1 for every other gesture */
+    hold(&s, &fixture_thumbs_up, 0.0f, 0.4);
+    CHECK(s.out.state == GV_IDLE && s.out.kind == GV_KIND_NONE);
+    finish(&s);
+}
+
 /* --- arming ------------------------------------------------------------- */
 
 static void no_hand_stays_idle(void)
@@ -1070,6 +1086,7 @@ int main(void)
     fprintf(stderr, "test_gesture\n");
     RUN(null_config_gives_working_defaults);
     RUN(nonsense_config_is_rejected);
+    RUN(the_output_says_which_gesture_is_active);
     RUN(no_hand_stays_idle);
     RUN(pose_must_be_held_before_arming);
     RUN(a_passing_glimpse_of_the_pose_does_not_arm);

@@ -19,6 +19,8 @@ IDLE, ARMING, ARMED = 0, 1, 2
 STATE_NAMES = {IDLE: "idle", ARMING: "arming", ARMED: "armed"}
 AXIS_NONE, AXIS_X, AXIS_Y = 0, 1, 2
 AXIS_NAMES = {AXIS_NONE: None, AXIS_X: "x", AXIS_Y: "y"}
+KIND_NONE, KIND_VOLUME, KIND_RESIZE = 0, 1, 2
+KIND_NAMES = {KIND_NONE: None, KIND_VOLUME: "volume", KIND_RESIZE: "resize"}
 VOL_OK = 0
 
 
@@ -36,7 +38,8 @@ class Frame(C.Structure):
 
 
 class Output(C.Structure):
-    _fields_ = [("state", C.c_int), ("volume", C.c_float), ("changed", C.c_int), ("axis", C.c_int)]
+    _fields_ = [("state", C.c_int), ("volume", C.c_float), ("changed", C.c_int), ("axis", C.c_int),
+                ("kind", C.c_int), ("scale", C.c_float)]
 
 
 class PoseLimits(C.Structure):

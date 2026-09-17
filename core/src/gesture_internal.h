@@ -62,6 +62,7 @@ struct gv_ctx {
  * and never needs to know which gesture it is driving.
  */
 typedef struct gv_gesture {
+    gv_kind kind; /* what gv_output reports while this gesture is arming or armed */
     /* Strict: may this frame start (or continue) arming this gesture? */
     int  (*can_arm)(const gv_frame *f, const gv_config *cfg);
     /* Lenient: while armed, does this frame still show the gesture going on? */

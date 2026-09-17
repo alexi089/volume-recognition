@@ -180,5 +180,6 @@ static void volume_on_idle(gv_ctx *ctx)
 }
 
 const gv_gesture gv_gesture_volume = {
+    GV_KIND_VOLUME,
     volume_can_arm, volume_can_stay, volume_on_armed, volume_on_frame, volume_on_idle,
 };
