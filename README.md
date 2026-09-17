@@ -1,26 +1,28 @@
 # volume-recognition
 
-Raise two fingers in front of your Mac's webcam and slide your hand left or
-right to turn the system volume down or up. Drop the pose and the volume stays
-where you left it. Inspired by BMW's in-car gesture control; also a vehicle for
+Raise two fingers in front of your Mac's webcam and slide your hand to turn the
+system volume up or down. Hold thumb and index finger out and pinch or spread
+them to shrink or grow the front window. Drop the pose and things stay where
+you left them. Inspired by BMW's in-car gesture control; also a vehicle for
 learning C.
 
 ## Status
 
-Tried live once (7.5 minutes, recorded). That session showed the first version
-was not usable: slides kept dropping out, it was too twitchy, and the real
-output volume never moved. The core has since been reworked against that
-recording; **the reworked version has not yet been tried live.**
+Two gestures. **Volume works live** (several sessions; left/right and up/down,
+speed-dependent gain, the glass HUD). **Pinch-to-resize is built and has never
+been tried live**: everything below about it comes from unit tests, replays of
+recorded hands, and a command-line check that really resized a window.
 
 | Piece | State |
 |---|---|
-| C core (filter, pose, state machine, glue, trace parser) | 229 checks across 5 suites, under ASan + UBSan; pose tests mutation-checked |
+| C core (filter, poses, state machine, two gestures, glue, window geometry, trace parser, replay verdict) | 726 checks across 8 suites, under ASan + UBSan; new logic mutation-checked |
 | Photo -> MediaPipe -> ctypes -> C state machine | tested (`app/test_bridge.py`) |
 | C -> CoreAudio -> real system volume | works on built-in speakers, and on AirPods in some states; see Known limits |
-| Live camera loop (`make run`) | two live sessions. The second crashed after 8 minutes (MediaPipe GPU buffer leak); fixed by moving to the CPU delegate, soak-tested for 15,000 frames with a flat 116 MB footprint. Live frame rate with the preview on the CPU delegate: 29.5 fps |
-| Dropping out mid-slide | on the recording: 69 -> 32 armed sessions, median 0.9 -> 2.4 s, under one second 40 -> 9. Proxy numbers: the recording has no intent labels |
-| Tuning constants | reasoned from one recording of one hand; **not yet tuned on scripted recordings** |
-| Real negative traces (typing, nose scratch, ...) | **none yet**; the four pass/fail traces in `traces/` are synthetic |
+| C -> Accessibility -> the front window | `core/build/win scale 0.9` resized a real window about its centre and put it back exactly; one write costs about 14 ms. Fixed-size windows and a missing permission are handled in code and **not yet seen for real** |
+| Live camera loop (`make run`), volume | several live sessions; 29.5 fps with the preview on the CPU delegate; soak-tested for 15,000 frames at a flat 116 MB |
+| Live camera loop, resize | **not run yet.** The overlay, HUD line and error banner were exercised without a camera only |
+| Scripted recordings (2 positive, 5 must-do-nothing) | one take. Both positives pass. **Two negatives fail:** touching the face arms the volume slider, and talking with the hands arms the resize once (a 2% twitch, rolled back) |
+| Tuning constants | measured from a handful of recordings of one hand; the resize constants from four ten-second clips |
 
 ## Requirements
 
@@ -41,24 +43,40 @@ pointer is on; `--hud-screen primary` pins it to the laptop's own display.
 `--no-preview` hides the camera window and leaves only the HUD;
 `--no-hud` does the opposite.
 
-In the preview: grey = idle, amber = arming, green = armed. Hold two fingers up
-(index and middle; ring and pinky curled) for a quarter of a second to arm,
-slide, then close your hand or lower it to release. `q` or `Esc` quits.
+In the preview: grey = idle, amber = arming, green = armed. `q` or `Esc` quits.
 
-If the camera cannot be opened, allow camera access for the app hosting your
-terminal (VS Code or Terminal) in System Settings > Privacy & Security > Camera,
-then restart that app.
+| To | Hold for a quarter of a second | Then | Let go by |
+|---|---|---|---|
+| change the volume | index and middle up, ring and pinky curled | slide right / up for louder, left / down for quieter | closing your hand or lowering it |
+| resize the front window | thumb and index out (an "L"), the other three curled, fingertips well apart | pinch to shrink, spread to grow, **slowly enough to watch the window follow** | closing your hand or lowering it |
+
+The window is whichever ordinary window is in front when the pinch arms; the
+preview names the app. It scales about its own centre and stays on its screen.
+
+Two permissions, both for the app hosting your terminal (VS Code or Terminal),
+both in System Settings > Privacy & Security, both needing that app restarted:
+**Camera**, or the camera cannot be opened; **Accessibility**, or windows cannot
+be resized (the preview shows a red banner saying so; volume still works).
 
 ## How it works
 
 ```
-camera -> [Python] mirror -> MediaPipe -> 21 landmarks + timestamp
-       -> [C] gv_step_system:  read system volume -> state machine -> set volume
+camera -> [Python] mirror -> MediaPipe -> 21 landmarks + left/right + timestamp
+       -> [C] gv_step_system:  state machine -> which gesture, and its value
+                               -> volume (CoreAudio)  |  front window (Accessibility)
        -> [Python] preview overlay, and one JSON line per frame to the HUD
 ```
 
 Python is a pipe; it holds no gesture logic. Everything that decides anything
-is in `core/` and is plain C11 with no dependencies beyond libm and CoreAudio.
+is in `core/` and is plain C11 with no dependencies beyond libm, CoreAudio and
+ApplicationServices.
+
+One state machine (`gesture.c`) owns what every gesture shares: arming after a
+held pose, the release grace, refusing frames that cannot be true. Each gesture
+is a small table of functions (`gestures/volume.c`, `gestures/resize.c`): its
+arm pose, its stay pose, and what to do with a good frame. Only one can be
+armed at a time, and no hand shape satisfies two arm poses (a test checks every
+fixture).
 
 - **Judging a finger.** Two measurements, because each alone is fooled by
   something real. *Reach* (tip vs middle joint, distance from the wrist) is
@@ -106,7 +124,31 @@ is in `core/` and is plain C11 with no dependencies beyond libm and CoreAudio.
 - **The volume cannot jump.** It moves at most 2.0 per second, and lost frames
   earn credit for at most 0.1 s, so no single step exceeds 0.2 whatever the
   detector does. With headphones on, this is the safety net.
-- **Honest errors.** Outputs with no software volume (HDMI / DisplayPort
+- **Pinch to resize.** The window's scale is the fingertip gap now over the gap
+  when the pose armed, measured in hand-lengths so distance from the camera
+  does not matter. It moves at most one doubling per second (a rate limit on
+  the RATIO, so it feels the same at every size) and lost frames earn no more
+  than 0.1 s of credit, as for volume.
+- **What a pinch cannot do, measured.** A fist and a full pinch are nearly the
+  same shape to a 2D camera (thumb still "out", index curled, fingertips 0.07
+  against 0.04 hand-lengths apart), and a fist must never mean "shrink to the
+  minimum". So the resize lets go once the index finger reads as curled: one
+  pinch reaches roughly 0.4x - 0.55x, and one spread about 1.3x (a hand only
+  opens so far; 1.7x at best). Further means letting go and pinching again.
+- **Closing your hand does not resize.** On the way to a fist the fingertips
+  pass through every smaller gap. When a resize ends because the hand changed
+  shape, it ends on the size from 0.3 s before its last good frame; when the
+  hand just leaves, nothing is undone. The cost: a pinch snapped shut in 0.2 s
+  looks exactly like closing the hand and does nothing. Whether a pinch made
+  while watching the window is slow enough is **the open question for the first
+  live try**.
+- **A thumb is not a finger.** "Out" is long and straight, as for fingers, with
+  its own measured limits. That alone let a pointing hand with the thumb resting
+  on the fist arm the resize, so arming also needs the thumb tip clear of the
+  curled fingers (0.28 hand-lengths or less when resting, 0.97 or more held out).
+- **Honest errors.** A window write is read back too: a window that settles on a
+  different size than asked is fine (apps have minimums, terminals snap to whole
+  characters); one that did not move at all is reported. Outputs with no software volume (HDMI / DisplayPort
   monitors) are reported as such. After every write the value is read back, and
   a write that did not take shows as a red banner across the preview.
 
@@ -124,13 +166,23 @@ Each file's comments explain the C idioms it uses the first time they appear.
    division.
 5. `core/include/gesture.h`, `core/src/gesture.c`: an opaque type, who owns
    heap memory, a state machine.
-6. `core/include/step.h`, `core/src/step.c`, `step_system.c`: function pointers
-   as dependency injection, and why the real backend lives in its own file.
-7. `core/src/trace.c`, `core/tools/replay.c`: parsing text without `strtok`,
-   `fgets` and over-long lines, a `realloc`-grown array, a `qsort` comparator,
-   one exit path that frees everything.
-8. `app/bridge.py`: the C ABI seen from outside, and the struct-size check
-   that guards it.
+6. `core/src/gesture_internal.h`, `core/src/gestures/volume.c`, `resize.c`: a
+   struct of function pointers as an interface (C's version of a class with
+   virtual methods), an optional hook that may be `NULL`, a ring buffer in a
+   fixed array, why a ratio is rate-limited in log space.
+7. `core/include/step.h`, `core/src/step.c`, `step_system.c`: function pointers
+   as dependency injection, and why the real backends live in their own file.
+8. `core/include/window.h`, `core/src/window_math.c`: pure arithmetic kept apart
+   from the system calls so it can be tested; clamp order.
+9. `core/src/window_macos.c`, `core/tools/win.c`: Core Foundation's manual
+   reference counting (Copy/Create you release, Get you do not), `goto done`
+   as the one cleanup exit, reading a value back instead of trusting a status.
+10. `core/src/trace.c`, `core/src/verdict.c`, `core/tools/replay.c`: parsing text
+    without `strtok`, `fgets` and over-long lines, a `realloc`-grown array, a
+    `qsort` comparator, a lookup table instead of an if-chain, one exit path
+    that frees everything.
+11. `app/bridge.py`: the C ABI seen from outside, and the struct-size check
+    that guards it.
 
 Tests build with `-fsanitize=address,undefined`. Try breaking something on
 purpose (read `lm[21]`, skip the `gv_destroy`) and run `make -C core test` to
@@ -161,6 +213,14 @@ All constants are in `gv_default_config()` in `core/src/gesture.c`:
 | `gate_max_speed` | 30 | believable palm speed, hand-lengths per second |
 | `filter_min_cutoff` | 1.0 Hz | lower = steadier at rest, laggier |
 | `filter_beta` | 4.0 | higher = less lag when moving fast |
+| `pose.thumb_extend_reach` / `thumb_extend_straight` | 1.05 / 0.67 | both must be exceeded to call the thumb out |
+| `pose.thumb_curl_reach` / `thumb_curl_straight` | 0.55 / 0.45 | falling below either calls it tucked in |
+| `pose.pinch_gap_min` | 0.73 | smallest fingertip gap, in hand-lengths, that may arm a resize (must be positive: the scale divides by it) |
+| `pose.thumb_clear_min` | 0.62 | how far the thumb tip must be from the curled fingers to arm a resize |
+| `scale_min` / `scale_max` | 0.25 / 4.0 | limits of one resize, relative to the window's size when it armed |
+| `scale_dead_band` | 0.01 | smallest relative change written to the window |
+| `scale_max_slew` | 1.0 | fastest the scale may move, in doublings per second |
+| `release_rollback_sec` | 0.3 | how far back a resize reaches for its final size when the hand closes (0 = off) |
 
 Four of them can be tried live without rebuilding:
 
@@ -185,15 +245,19 @@ frame's landmarks, replayable through the C core) and
 `real_nose_scratch.events.csv` (what the app did: state, target volume and the
 status of each volume write).
 
-Then add a line to `traces/manifest.txt` with the expectation (`up`, `down`, or
-`none`). `make test` replays every listed trace. What is needed next, about
+Then add a line to `traces/manifest.txt` with the expectation: `up` / `down`
+(the volume, and no window touched), `grow` / `shrink` (a window, and the volume
+untouched) or `none` (no change of either kind). `make test` replays every
+listed trace. What is needed next, about
 45 s each:
 
 - positives: `real_slide_up`, `real_slide_down` (arm, slide slowly, close your
   hand; five times);
 - negatives, which matter most: `real_typing`, `real_nose_scratch`,
   `real_cup_reach`, `real_waving`, `real_talking_hands`. Each must produce
-  **zero** volume change.
+  **zero** change, of the volume or of a window;
+- for the resize: `real_pinch_grow`, `real_pinch_shrink`, made while watching a
+  real window respond. None exist yet.
 
 Thresholds get tuned to minimise dropped slides on the positives *subject to*
 zero changes on every negative. `traces/real_first_session.csv` is the first
@@ -207,6 +271,16 @@ live session: no intent labels, so it is a tuning corpus (`stats` only).
   this app running. The same AirPods accepted writes an hour earlier. The cause
   is not yet known (in-ear detection is the leading guess, unverified). There
   is no software workaround; the app shows a red banner.
+- **The resize has not been tried live**, and its range per pinch is small by
+  construction (see "What a pinch cannot do"). A snap pinch does nothing.
+- "The front window" is the frontmost ordinary window not belonging to this app
+  at the moment the pinch arms. It can surprise; the preview names it.
+- A resized window can end up partly behind the Dock: the menu bar's height is
+  measured per display, the Dock's cannot be from C.
+- Writing a window takes about 14 ms inside a 33 ms frame; the frame rate will
+  dip while a resize is moving. By how much is unmeasured.
+- Some apps enforce minimum sizes or aspect ratios; the window then settles on
+  what the app allows, which is reported as success.
 - RGB webcam: degrades in dim light. BMW's system uses an infrared depth camera.
 - One hand, the first MediaPipe finds.
 - MediaPipe is pinned to 0.10.35 and runs on the CPU delegate (4.5 ms a frame).
@@ -222,6 +296,8 @@ live session: no intent labels, so it is a tuning corpus (`stats` only).
   listed in `core/include/volume.h`.
 - The HUD (`hud/`, Swift + AppKit) is glass-style, built on `NSVisualEffectView`.
   It is not Apple's Liquid Glass, which needs macOS 26 and its SDK. Nobody who
-  built it could see the screen; its logic is tested (74 checks) but its looks
-  were judged only by the owner. See `hud/README.md`.
-- macOS only. The C core is portable; `volume_macos.c` and the HUD are not.
+  built it could see the screen; its logic is tested (105 checks) but its looks
+  were judged only by the owner, and the resize readout by nobody yet. See
+  `hud/README.md`.
+- macOS only. The C core is portable; `volume_macos.c`, `window_macos.c` and the
+  HUD are not.
