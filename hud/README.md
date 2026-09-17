@@ -35,8 +35,18 @@ level bar, and a percentage. It contains no gesture, audio, or camera logic.
 ## Options
 
 ```
-volume-hud [--opacity 0.15-1.0]
+volume-hud [--opacity 0.15-1.0] [--screen pointer|primary]
 ```
+
+`--screen` picks the display. `pointer` (default): the display the mouse pointer
+is on at the moment the HUD appears, re-chosen every time it appears. `primary`:
+always the display with the menu bar. The first version used `NSScreen.main`,
+which is not "the main display" but "the screen with keyboard focus"; on a
+laptop plus an ultrawide it put the pill in the far corner of the ultrawide
+while its owner watched the laptop. Placement was verified by asking the window
+server for the window's bounds in both modes (18 pt from the left; 18 pt below
+the top, or below the menu bar where there is one). From the app:
+`make run ARGS="--hud-screen primary"`.
 
 `--opacity` is how much of the blur material shows: 1.0 is the stock
 `.hudWindow` look, lower lets more of what is behind the pill through and reads
@@ -145,7 +155,8 @@ referenced, and the result is never called "Liquid Glass".
 
 - `Sources/HudMessage.swift` — the stdin contract + parser/validator. Foundation
   only, no AppKit; the data boundary.
-- `Sources/HudOptions.swift` — command-line options (`--opacity`). Foundation only.
+- `Sources/HudOptions.swift` — command-line options (`--opacity`, `--screen`). Foundation only.
+- `Sources/ScreenChooser.swift` — which display to appear on. Pure geometry.
 - `Sources/VisibilityModel.swift` — pure reducer for the show/fade/linger/pulse
   lifecycle. Foundation only, no AppKit; the animation state machine.
 - `Sources/LevelBarView.swift`, `HudContentView.swift`, `HudPanel.swift` — the UI.

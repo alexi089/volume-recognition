@@ -3,7 +3,7 @@
 // Command-line options. Foundation-only and pure, so it is tested in the plain
 // test executable alongside the parser and the visibility reducer.
 //
-//   volume-hud [--opacity 0.15...1.0]
+//   volume-hud [--opacity 0.15...1.0] [--screen pointer|primary]
 //
 // Nobody who worked on this HUD could see it (no screen access from the build
 // session), so how see-through the glass should be is left to the person
@@ -19,6 +19,7 @@ struct HudOptions: Equatable {
     static let opacityRange = 0.15...1.0
 
     var glassOpacity: Double = HudOptions.defaultGlassOpacity
+    var screen: ScreenPolicy = .pointer
     /// Problems found while parsing. The HUD still starts; these go to stderr.
     var warnings: [String] = []
 
@@ -39,6 +40,16 @@ struct HudOptions: Equatable {
                     break
                 }
                 options.glassOpacity = min(max(value, opacityRange.lowerBound), opacityRange.upperBound)
+            case "--screen":
+                guard let text = rest.next() else {
+                    options.warnings.append("--screen needs a value: pointer or primary")
+                    break
+                }
+                guard let policy = ScreenPolicy(rawValue: text) else {
+                    options.warnings.append("--screen \(text): expected pointer or primary; using \(options.screen.rawValue)")
+                    break
+                }
+                options.screen = policy
             default:
                 options.warnings.append("unknown option \(argument)")
             }

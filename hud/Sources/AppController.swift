@@ -33,7 +33,10 @@ final class AppController: NSObject, NSApplicationDelegate {
     // Top-left placement.
     private let edgeMargin: CGFloat = 18
 
+    private let screenPolicy: ScreenPolicy
+
     init(options: HudOptions) {
+        screenPolicy = options.screen
         let initial = NSRect(x: 0, y: 0, width: 240, height: 80)
         content = HudContentView(frame: initial, glassOpacity: options.glassOpacity)
         panel = HudPanel(contentRect: initial)
@@ -208,8 +211,13 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     private func positionTopLeft() {
-        guard let screen = NSScreen.main else { return }
-        let vf = screen.visibleFrame                // excludes menu bar and Dock
+        // Deliberately NOT NSScreen.main, which is "the screen with keyboard
+        // focus" and put the pill on the wrong display. See ScreenChooser.
+        let screens = NSScreen.screens
+        guard let index = ScreenChooser.choose(policy: screenPolicy,
+                                               pointer: NSEvent.mouseLocation,
+                                               screens: screens.map(\.frame)) else { return }
+        let vf = screens[index].visibleFrame        // excludes menu bar and Dock
         let frame = panel.frame
         // The visible pill is inset from the panel by shadowMargin on all sides;
         // offset so the PILL sits at edgeMargin from the top-left, not the panel.

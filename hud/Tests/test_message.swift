@@ -12,6 +12,7 @@
 //
 // Build/run:  make -C hud test
 
+import CoreGraphics
 import Foundation
 
 /// Minimal assertion harness. State lives on the instance (not in globals) so
@@ -80,8 +81,44 @@ struct TestMain {
         parserTests(h)
         visibilityTests(h)
         optionsTests(h)
+        screenTests(h)
         print("\n\(h.passed) passed, \(h.failed) failed")
         exit(h.failed > 0 ? 1 : 0)
+    }
+
+    // MARK: - Which screen
+
+    /// The owner's real layout, where this went wrong: built-in display at the
+    /// origin, an ultrawide to its right and 288 pt up. The HUD used
+    /// NSScreen.main, which is "the screen with keyboard focus", not "the main
+    /// display"; it landed on the ultrawide while the owner watched the built-in.
+    static func screenTests(_ h: Harness) {
+        func check(_ cond: Bool, _ label: String, _ detail: @autoclosure () -> String = "") {
+            if cond { h.ok(label) } else { h.fail(label, detail()) }
+        }
+        let builtIn = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let ultrawide = CGRect(x: 1728, y: 288, width: 5120, height: 1440)
+        let screens = [builtIn, ultrawide]   // AppKit lists the primary display first
+
+        check(ScreenChooser.choose(policy: .pointer, pointer: CGPoint(x: 600, y: 500), screens: screens) == 0,
+              "pointer on the built-in display -> built-in")
+        check(ScreenChooser.choose(policy: .pointer, pointer: CGPoint(x: 4000, y: 900), screens: screens) == 1,
+              "pointer on the ultrawide -> ultrawide")
+        check(ScreenChooser.choose(policy: .primary, pointer: CGPoint(x: 4000, y: 900), screens: screens) == 0,
+              "policy primary ignores the pointer")
+        // Just past the built-in's right edge but below the ultrawide's bottom: on no screen.
+        check(ScreenChooser.choose(policy: .pointer, pointer: CGPoint(x: 1800, y: 100), screens: screens) == 0,
+              "pointer on no screen -> falls back to the primary")
+        // The shared edge belongs to exactly one screen (the first that contains it).
+        check(ScreenChooser.choose(policy: .pointer, pointer: CGPoint(x: 1728, y: 600), screens: screens) == 1,
+              "x = 1728 is the ultrawide's first column, not the built-in's last")
+        check(ScreenChooser.choose(policy: .pointer, pointer: CGPoint(x: 10, y: 10), screens: []) == nil,
+              "no screens at all -> nil, not a crash")
+
+        check(HudOptions.parse(["x"]).screen == .pointer, "default screen policy is the pointer's screen")
+        check(HudOptions.parse(["x", "--screen", "primary"]).screen == .primary, "--screen primary is taken")
+        let bad = HudOptions.parse(["x", "--screen", "left"])
+        check(bad.screen == .pointer && bad.warnings.count == 1, "--screen left: default kept, one warning", "\(bad)")
     }
 
     // MARK: - Options

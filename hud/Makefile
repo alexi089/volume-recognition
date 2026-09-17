@@ -20,6 +20,7 @@ SWIFT_FLAGS := -swift-version 6 -O -module-cache-path $(MODCACHE)
 UI_SOURCES := \
 	$(SRC)/HudMessage.swift \
 	$(SRC)/HudOptions.swift \
+	$(SRC)/ScreenChooser.swift \
 	$(SRC)/VisibilityModel.swift \
 	$(SRC)/LevelBarView.swift \
 	$(SRC)/HudContentView.swift \
@@ -35,6 +36,7 @@ UI_SOURCES := \
 TEST_SOURCES := \
 	$(SRC)/HudMessage.swift \
 	$(SRC)/HudOptions.swift \
+	$(SRC)/ScreenChooser.swift \
 	$(SRC)/VisibilityModel.swift \
 	$(TESTS)/test_message.swift
 

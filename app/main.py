@@ -95,7 +95,7 @@ class Hud:
     """Feeds the native HUD process one JSON line per frame. Optional: if the
     binary is not built, or it exits, the app carries on without it."""
 
-    def __init__(self, enabled: bool, opacity: float | None = None):
+    def __init__(self, enabled: bool, opacity: float | None = None, screen: str | None = None):
         self._proc = None
         if not enabled:
             return
@@ -105,6 +105,8 @@ class Hud:
         command = [str(HUD_PATH)]
         if opacity is not None:
             command += ["--opacity", str(opacity)]  # validated and clamped by the HUD itself
+        if screen is not None:
+            command += ["--screen", screen]
         self._proc = subprocess.Popen(command, stdin=subprocess.PIPE)
         # Non-blocking: a HUD that is alive but has stopped reading would
         # otherwise fill the 64 KB pipe and then block write() forever, freezing
@@ -277,6 +279,9 @@ def main() -> None:
     parser.add_argument("--no-hud", action="store_true", help="do not launch the native HUD")
     parser.add_argument("--hud-opacity", type=float, metavar="0.15-1.0",
                         help="how solid the HUD's glass is (default 0.6; lower is clearer)")
+    parser.add_argument("--hud-screen", choices=["pointer", "primary"],
+                        help="which display the HUD appears on: the one the mouse pointer is on (default), "
+                             "or always the primary display")
     parser.add_argument("--no-preview", action="store_true", help="do not show the camera preview window (quit with Ctrl-C)")
     args = parser.parse_args()
 
@@ -288,7 +293,7 @@ def main() -> None:
             sys.exit("Camera stopped delivering frames.")
         aspect = first.shape[1] / first.shape[0]
 
-        hud = Hud(enabled=not args.no_hud, opacity=args.hud_opacity)
+        hud = Hud(enabled=not args.no_hud, opacity=args.hud_opacity, screen=args.hud_screen)
         recorder = Recorder(args.record, aspect)
         start = time.monotonic()
         last_ts_ms, fps, last_frame_t = -1, 0.0, start

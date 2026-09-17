@@ -36,7 +36,9 @@ make run        # camera preview + gesture control + the glass HUD (top-left)
 ```
 
 `make run ARGS="--hud-opacity 0.4"` makes the HUD's glass clearer (0.15 - 1.0,
-default 0.6); `--no-preview` hides the camera window and leaves only the HUD;
+default 0.6). The HUD appears at the top-left of whichever display the mouse
+pointer is on; `--hud-screen primary` pins it to the laptop's own display.
+`--no-preview` hides the camera window and leaves only the HUD;
 `--no-hud` does the opposite.
 
 In the preview: grey = idle, amber = arming, green = armed. Hold two fingers up
