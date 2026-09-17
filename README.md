@@ -32,8 +32,12 @@ macOS on Apple Silicon, Command Line Tools (`clang`, `make`, `swiftc`), and
 ```sh
 make setup      # venv, mediapipe, and the 7.8 MB hand-landmark model
 make test       # C suites, trace replays, Python <-> C test, memory-growth test. No camera, volume untouched
-make run        # camera preview + gesture control (+ HUD if built: make -C hud)
+make run        # camera preview + gesture control + the glass HUD (top-left)
 ```
+
+`make run ARGS="--hud-opacity 0.4"` makes the HUD's glass clearer (0.15 - 1.0,
+default 0.6); `--no-preview` hides the camera window and leaves only the HUD;
+`--no-hud` does the opposite.
 
 In the preview: grey = idle, amber = arming, green = armed. Hold two fingers up
 (index and middle; ring and pinky curled) for a quarter of a second to arm,
@@ -194,4 +198,8 @@ live session: no intent labels, so it is a tuning corpus (`stats` only).
   looked into.
 - The read-back check on volume writes is best-effort; its blind spots are
   listed in `core/include/volume.h`.
+- The HUD (`hud/`, Swift + AppKit) is glass-style, built on `NSVisualEffectView`.
+  It is not Apple's Liquid Glass, which needs macOS 26 and its SDK. Nobody who
+  built it could see the screen; its logic is tested (74 checks) but its looks
+  were judged only by the owner. See `hud/README.md`.
 - macOS only. The C core is portable; `volume_macos.c` and the HUD are not.

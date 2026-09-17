@@ -2,7 +2,7 @@ PY        := .venv/bin/python
 MODEL     := app/models/hand_landmarker.task
 MODEL_URL := https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
 
-.PHONY: setup model core test run
+.PHONY: setup model core hud test run
 
 # The stamp file is written only after the install succeeds. Depending on
 # .venv/bin/python instead would treat a venv whose install failed half-way as
@@ -25,13 +25,19 @@ $(MODEL):
 core:
 	$(MAKE) -C core all
 
+# The native glass-style HUD (Swift). Optional at run time: the app carries on
+# without it if it is not built.
+hud:
+	$(MAKE) -C hud all
+
 # C unit tests (under ASan + UBSan), the Python <-> C end-to-end test, and the
 # memory-growth test. None of them touches the camera or the real system volume.
 test: setup core
 	$(MAKE) -C core test
+	$(MAKE) -C hud test
 	$(PY) app/test_bridge.py
 	$(PY) app/test_leak.py
 
 # Extra arguments: make run ARGS="--record traces/slide_up.csv"
-run: setup core
+run: setup core hud
 	$(PY) app/main.py $(ARGS)

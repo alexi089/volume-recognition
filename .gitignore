@@ -10,4 +10,5 @@ app/models/*.task
 
 # C build output
 core/build/
+hud/build/
 *.dSYM/

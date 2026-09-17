@@ -95,14 +95,17 @@ class Hud:
     """Feeds the native HUD process one JSON line per frame. Optional: if the
     binary is not built, or it exits, the app carries on without it."""
 
-    def __init__(self, enabled: bool):
+    def __init__(self, enabled: bool, opacity: float | None = None):
         self._proc = None
         if not enabled:
             return
         if not HUD_PATH.exists():
             print(f"HUD not built ({HUD_PATH.relative_to(ROOT)}); run `make -C hud`. Continuing without it.")
             return
-        self._proc = subprocess.Popen([str(HUD_PATH)], stdin=subprocess.PIPE)
+        command = [str(HUD_PATH)]
+        if opacity is not None:
+            command += ["--opacity", str(opacity)]  # validated and clamped by the HUD itself
+        self._proc = subprocess.Popen(command, stdin=subprocess.PIPE)
         # Non-blocking: a HUD that is alive but has stopped reading would
         # otherwise fill the 64 KB pipe and then block write() forever, freezing
         # the camera loop with it. Each line is far below PIPE_BUF (512 bytes),
@@ -272,6 +275,8 @@ def main() -> None:
     parser.add_argument("--arm-hold", type=float, metavar="SEC", help="how long the pose must hold to arm (default 0.25)")
     parser.add_argument("--grace", type=float, metavar="SEC", help="how long the pose may be missing before release (default 0.25)")
     parser.add_argument("--no-hud", action="store_true", help="do not launch the native HUD")
+    parser.add_argument("--hud-opacity", type=float, metavar="0.15-1.0",
+                        help="how solid the HUD's glass is (default 0.6; lower is clearer)")
     parser.add_argument("--no-preview", action="store_true", help="do not show the camera preview window (quit with Ctrl-C)")
     args = parser.parse_args()
 
@@ -283,7 +288,7 @@ def main() -> None:
             sys.exit("Camera stopped delivering frames.")
         aspect = first.shape[1] / first.shape[0]
 
-        hud = Hud(enabled=not args.no_hud)
+        hud = Hud(enabled=not args.no_hud, opacity=args.hud_opacity)
         recorder = Recorder(args.record, aspect)
         start = time.monotonic()
         last_ts_ms, fps, last_frame_t = -1, 0.0, start
