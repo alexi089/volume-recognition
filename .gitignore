@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Downloaded by `make model` (7.8 MB binary, not ours to version)
+app/models/*.task
+
+# C build output
+core/build/
+*.dSYM/

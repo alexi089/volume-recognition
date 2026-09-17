@@ -1,0 +1,4 @@
+# Python 3.12 (see Makefile `setup`). mediapipe pulls in numpy and
+# opencv-contrib-python; do NOT also install opencv-python, the two packages
+# both ship the `cv2` module and overwrite each other.
+mediapipe==1.0.1
