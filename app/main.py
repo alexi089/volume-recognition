@@ -243,6 +243,19 @@ def draw_overlay(frame, landmarks, state: int, volume: float, error: str | None,
         cv2.putText(frame, error, (12, 92), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
 
 
+def draw_prompt(frame, prompt: str, remaining: float, recording: bool) -> None:
+    """Guided recording: what to do and for how long, across the bottom third of the
+    preview where it does not cover a raised hand."""
+    h, w = frame.shape[:2]
+    top, bottom = h - 140, h - 62  # clear of the volume bar and its percentage
+    shade = frame.copy()
+    cv2.rectangle(shade, (0, top), (w, bottom), (120, 60, 20) if recording else (40, 40, 40), -1)
+    cv2.addWeighted(shade, 0.75, frame, 0.25, 0, dst=frame)
+    head = f"RECORDING  {remaining:4.0f}s left" if recording else f"GET READY  starts in {remaining:3.0f}s"
+    cv2.putText(frame, head, (12, top + 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(frame, prompt, (12, top + 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+
+
 class ErrorLatch:
     """Keeps the last error on screen for a moment. Volume status only appears
     on the frames that actually wrote, so without this the banner would blink
@@ -276,6 +289,10 @@ def main() -> None:
     parser.add_argument("--gain-fast", type=float, help="volume per hand-length when moving fast (default 0.6)")
     parser.add_argument("--arm-hold", type=float, metavar="SEC", help="how long the pose must hold to arm (default 0.25)")
     parser.add_argument("--grace", type=float, metavar="SEC", help="how long the pose may be missing before release (default 0.25)")
+    parser.add_argument("--duration", type=float, metavar="SEC", help="quit by itself after this long (guided recording)")
+    parser.add_argument("--lead-in", type=float, metavar="SEC", default=0.0,
+                        help="show the prompt for this long before recording and gesture control start")
+    parser.add_argument("--prompt", help="instruction shown on the preview during a guided recording")
     parser.add_argument("--no-hud", action="store_true", help="do not launch the native HUD")
     parser.add_argument("--hud-opacity", type=float, metavar="0.15-1.0",
                         help="how solid the HUD's glass is (default 0.6; lower is clearer)")
@@ -320,12 +337,18 @@ def main() -> None:
 
                 landmarks = detect(landmarker, bgr, ts_ms)
 
-                t_sec = now - start
-                step = gesture.step(landmarks, t_sec)
-                error = latch.update(describe_error(step.vol), now)
-
-                recorder.write(t_sec, landmarks, step)
-                hud.send(step.out.state, step.out.volume, error, step.out.axis)
+                # Guided recording: nothing is recorded and nothing can move the
+                # volume until the lead-in is over, so a clip holds only the
+                # behaviour it was asked for, and its clock starts at zero.
+                t_sec = now - start - args.lead_in
+                live = t_sec >= 0.0
+                if args.duration is not None and t_sec >= args.duration:
+                    break
+                if live:
+                    step = gesture.step(landmarks, t_sec)
+                    error = latch.update(describe_error(step.vol), now)
+                    recorder.write(t_sec, landmarks, step)
+                    hud.send(step.out.state, step.out.volume, error, step.out.axis)
 
                 dt = now - last_frame_t
                 last_frame_t = now
@@ -337,7 +360,11 @@ def main() -> None:
                 if bgr.shape[1] > PREVIEW_WIDTH:
                     scale = PREVIEW_WIDTH / bgr.shape[1]
                     bgr = cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-                draw_overlay(bgr, landmarks, step.out.state, step.out.volume, error, fps, step.out.axis)
+                if live:
+                    draw_overlay(bgr, landmarks, step.out.state, step.out.volume, error, fps, step.out.axis)
+                if args.prompt:
+                    remaining = (args.duration - t_sec) if (live and args.duration) else -t_sec
+                    draw_prompt(bgr, args.prompt, max(remaining, 0.0), recording=live)
                 cv2.imshow("volume gesture", bgr)
                 if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
                     break

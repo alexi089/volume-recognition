@@ -621,6 +621,24 @@ static void the_top_edge_pushes_up_and_the_bottom_edge_down(void)
     finish(&down);
 }
 
+/* Lost frames must not bank up push, any more than they bank up slew. After a
+ * 0.2 s gap at the edge, the first frame back is credited 0.1 s of push, not 0.2. */
+static void a_gap_at_the_edge_does_not_earn_a_big_push(void)
+{
+    session s = start_with_edge_push(0.0f);
+    arm(&s, &fixture_victory, 0.0f);
+    slide(&s, &fixture_victory, 0.0f, 3.7f, 1.0);
+    hold(&s, &fixture_victory, 3.7f, 0.5);       /* settled at the right edge, being pushed */
+    hold(&s, NULL, 0.0f, 0.2);                   /* tracking drops out */
+    float before = s.out.volume;
+    frame(&s, &fixture_victory, 3.7f);
+    CHECK(s.out.state == GV_ARMED);
+    float step = s.out.volume - before;
+    CHECK(step > 0.0f);
+    CHECK(step < EDGE_RATE * 0.1f + 0.015f);     /* 0.1 s of credit plus a little filter settle; 0.2 s would be 0.06+ */
+    finish(&s);
+}
+
 /* Only the edge the slide is heading for counts. The case that matters: a
  * raised hand very often has its wrist at or below the bottom of the picture
  * (the landmark model extrapolates it). Sliding UP from there, the wrist is
@@ -711,7 +729,9 @@ static void a_stall_longer_than_the_grace_period_releases(void)
     CHECK(s.out.state == GV_ARMED);
     s.t += 2.0; /* the app froze; the hand is somewhere else entirely now */
     frame(&s, &fixture_victory, 1.5f);
-    CHECK(s.out.state != GV_ARMED);
+    /* Released, and the very same frame (it shows the pose) starts a fresh
+     * arming rather than being thrown away: no frame of latency on the way back. */
+    CHECK(s.out.state == GV_ARMING);
     CHECK(s.changes == 0);
     CHECK_NEAR(s.out.volume, 0.50f, 1e-6);
     finish(&s);
@@ -1074,6 +1094,7 @@ int main(void)
     RUN(holding_at_the_right_edge_keeps_raising_the_volume);
     RUN(holding_at_the_left_edge_keeps_lowering_it);
     RUN(the_top_edge_pushes_up_and_the_bottom_edge_down);
+    RUN(a_gap_at_the_edge_does_not_earn_a_big_push);
     RUN(an_edge_the_slide_is_not_heading_for_does_nothing);
     RUN(vertical_travel_is_scaled_by_the_aspect_ratio);
     RUN(dropping_the_pose_releases_and_keeps_the_volume);

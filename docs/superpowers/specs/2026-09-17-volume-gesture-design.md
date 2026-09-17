@@ -176,7 +176,8 @@ leaving the frame.
   sweeps, which then caught up in one jump.
 - **Slew limit.** 2.0 per second, with at most 0.1 s of credit across a gap, so
   no single step exceeds 0.2. Without the cap, a 0.23 s gap earned a 0.46 jump.
-- **Gain** 1/3 -> 0.2; **release grace** 150 -> 250 ms; **capture** 1280x720
+- **Gain** 1/3 -> 0.2 (superseded the same day by speed-dependent gain, see
+  "Round 3" below); **release grace** 150 -> 250 ms; **capture** 1280x720
   with a 960 px preview (22.1 -> 28.7 fps with the preview, no hand in view).
 - **A naive target, corrected.** The plan asked for "no single-frame volume
   step above 0.05". At 21 fps a real 12 hand-lengths/s sweep legitimately moves
@@ -193,6 +194,48 @@ Closed_Fist / Open_Palm). It may well beat hand-written geometry. It would move
 the key decision out of the C this project exists to teach, and "Victory" is a
 spread V rather than two fingers up. It is the fallback if scripted recordings
 cannot reach clean positives with zero negative triggers.
+
+## Round 3: up/down, speed-dependent gain, the edge of the picture (2026-09-17)
+
+From the second and third live sessions ("make it faster", "up and down should
+work", "our fingers are lost ... volume only moves so much").
+
+- **Axis lock, not axis sum.** A slide runs left/right or up/down (right and up
+  are louder). The first movement of at least 0.5 hand-lengths that is at least
+  twice the travel on the other axis picks the axis for that slide; a diagonal
+  picks nothing. The two are not added: recorded sideways slides wander 0.7 -
+  1.6 hand-lengths vertically. Travel is counted from the signed lock distance,
+  not from where the hand is on the frame that settles it (frames are discrete
+  and a fast move can be far past the line; using the position threw travel
+  away). Simulated and not adopted: requiring the hand to be still before
+  arming; it made arming markedly harder for an unclear gain. Known cost: in an
+  up/down slide, lowering the hand to leave lowers the volume until the pose
+  ends; closing the hand first avoids it.
+- **Speed-dependent gain.** The slider is an accumulator: each believed frame
+  adds gain(speed) x travel since the last one, gain rising linearly from 0.15 at
+  1 hand-length/s to 0.6 at 5 (recorded median armed speed 1.3, 90th percentile
+  6.1). Clamped as it accumulates, so pushing past an end builds no dead zone.
+  With the two gains equal it reduces to the old position mapping, which is how
+  the tests pin it. The price, tested and stated: out fast and back slow is a net
+  change.
+- **Vertical travel x aspect.** The third session's picture measured 8.1 by 4.6
+  hand-lengths with a hand two tall; vertical travel counts 1.78x so the same
+  fraction of the picture gives the same change on either axis.
+- **Edge push.** In that session a slide moved the volume 0.18 at the median and
+  4 of 12 ended at an edge. Within 4% of the edge the slide is heading for, the
+  volume keeps moving at 0.35/s. Sideways the furthest landmark counts; upwards
+  the two raised fingertips; downwards the wrist. "Heading for" is judged by
+  travel, because a raised hand's wrist is often at or below the bottom of the
+  picture and sliding up from there must not be dragged down. Credit per frame
+  is capped like the slew limit's.
+- **HUD.** Top-left minimal glass pill (owner's spec), `--opacity` because nobody
+  but the owner can see it, and the display chosen deliberately: `NSScreen.main`
+  is the screen with keyboard focus, not the main display, and had put the pill
+  in the far corner of a 5120-wide second monitor.
+
+A third review (13 commits) found no logic defects and these documentation
+errors, since fixed: the README still described the fixed 0.2 gain and
+"five hand-lengths", and left the three features above undocumented.
 
 ## The crash in the second live session (2026-09-17)
 

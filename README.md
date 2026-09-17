@@ -73,10 +73,27 @@ is in `core/` and is plain C11 with no dependencies beyond libm and CoreAudio.
 - **Staying armed is lenient.** Only "index and middle have not closed". A
   relaxed hand's ring and pinky wander in and out of looking extended; demanding
   the full pose on every frame is what made the first version drop out.
-- **Sliding.** Volume follows the palm centre, measured in hand-lengths from
-  where it armed, so distance from the camera does not change sensitivity.
-  Five hand-lengths cover the full range. A One Euro filter removes jitter at
-  rest without adding much lag in motion.
+- **Sliding, sideways or up and down.** Right and up are louder. The two are
+  not added together: measured on real slides, a sideways sweep wanders 0.7 -
+  1.6 hand-lengths vertically (an arm swings in an arc), which added in would
+  be 13 - 32% of unasked-for volume. The first movement of at least half a
+  hand-length that is at least twice the travel on the other axis picks the
+  axis for that slide; a diagonal picks nothing. Travel is counted from that
+  half hand-length, so there is no jump and small adjustments stay possible.
+  Vertical travel counts 1.78x (the aspect ratio), because the picture has that
+  much less room top to bottom. Travel is measured in hand-lengths, so distance
+  from the camera does not change sensitivity; a One Euro filter removes jitter
+  at rest without adding much lag in motion.
+- **Precise when slow, quick when fast.** One fixed gain failed both ways live:
+  1/3 per hand-length was too twitchy to set a level, 0.2 too slow to get
+  anywhere. So the gain follows the hand's speed, like a mouse pointer: 0.15 per
+  hand-length at or below 1 hand-length/s (about seven hand-lengths for the
+  full range), rising to 0.6 at 5/s (under two). The price: out fast and back
+  slow is a net change. It is a relative control, not a physical slider.
+- **Running out of picture.** At a desk the picture is about 8 hand-lengths wide
+  and 4.6 tall, and the hand is two tall, so a slide reaches the edge long
+  before the volume reaches the end. Hold the hand at the edge the slide was
+  heading for and the volume keeps moving at 0.35 per second.
 - **Release.** Close your hand or take it out of frame. Only good frames can
   move the slider, so lowering your hand cannot jerk the volume. Good frames may
   be missing for 250 ms before the slider lets go, and a stall longer than that
@@ -134,7 +151,10 @@ All constants are in `gv_default_config()` in `core/src/gesture.c`:
 | `pose.curl_reach` / `curl_straight` | 1.00 / 0.75 | falling below either calls it curled |
 | `arm_hold_sec` | 0.25 | longer = fewer accidental arms, slower to start |
 | `release_grace_sec` | 0.25 | longer = more tolerant of lost frames, slower to let go |
-| `gain` | 0.2 | volume per hand-length of travel |
+| `gain` / `gain_fast` | 0.15 / 0.6 | volume per hand-length when slow / when fast; equal = a plain fixed gain |
+| `accel_speed_lo` / `accel_speed_hi` | 1.0 / 5.0 | hand-lengths per second where the gain starts and stops rising |
+| `axis_lock_hands` / `axis_dominance` | 0.5 / 2.0 | travel that picks an axis, and how far ahead of the other axis it must be |
+| `edge_margin` / `edge_rate` | 0.04 / 0.35 | how close to the picture's edge counts, and volume per second while held there (0 = off) |
 | `dead_band` | 0.01 | smallest change written to the system |
 | `max_slew` | 2.0 /s | fastest the volume may move |
 | `gate_scale_min` / `max` | 0.7 / 1.4 | believable frame-to-frame change in hand size |
@@ -142,10 +162,10 @@ All constants are in `gv_default_config()` in `core/src/gesture.c`:
 | `filter_min_cutoff` | 1.0 Hz | lower = steadier at rest, laggier |
 | `filter_beta` | 4.0 | higher = less lag when moving fast |
 
-Three of them can be tried live without rebuilding:
+Four of them can be tried live without rebuilding:
 
 ```sh
-make run ARGS="--gain 0.15 --arm-hold 0.3 --grace 0.3"
+make run ARGS="--gain 0.12 --gain-fast 0.8 --arm-hold 0.3 --grace 0.3"
 ```
 
 To see what a change does to a recording before trying it on a hand:
