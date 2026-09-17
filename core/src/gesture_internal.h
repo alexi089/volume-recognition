@@ -69,6 +69,13 @@ struct gv_ctx {
 
     gv_axis axis;           /* which way this slide runs; NONE until it is clear */
     float   axis_offset;    /* signed lock distance; travel is counted from there */
+
+    /* Not the recogniser's: gv_step's memory between frames (step.c). It lives
+     * here because the context is the one object the caller already carries
+     * from frame to frame; gesture.c never reads it. gv_create zeroes it. */
+    int step_resize_active;  /* a resize is armed and the window was asked for */
+    int step_window_held;    /* ... and we got it, so it must be let go */
+    int step_acquire_status; /* how asking went (a win_status), repeated while armed */
 };
 
 /*

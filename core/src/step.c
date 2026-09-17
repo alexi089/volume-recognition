@@ -1,27 +1,61 @@
 #include "step.h"
 
-gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_volume_ops *ops)
+#include "gesture_internal.h" /* the three step_ fields of gv_ctx */
+
+gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *backends)
 {
-    gv_step_result r = { { GV_IDLE, 0.0f, 0, GV_AXIS_NONE, GV_KIND_NONE, 1.0f }, VOL_OK };
+    const gv_volume_ops *volume = &backends->volume;
+    const gv_window_ops *window = &backends->window;
+    gv_step_result r = { { GV_IDLE, 0.0f, 0, GV_AXIS_NONE, GV_KIND_NONE, 1.0f }, VOL_OK, WIN_OK };
 
     /* 1. Tell the core where the system volume is, so arming starts from the
      *    truth even if the volume keys were pressed since the last slide. The
      *    core ignores this while armed; asking anyway keeps this function free
      *    of any knowledge about the core's state. */
     float current;
-    vol_status get_status = ops->get(&current);
+    vol_status get_status = volume->get(&current);
     if (get_status == VOL_OK)
         gv_set_current_volume(ctx, current);
 
     /* 2. The pure part. */
     r.out = gv_update(ctx, frame);
 
-    /* 3. Apply. A failed write is the more useful thing to report on a frame
+    /* 3. Apply. `changed` belongs to whichever gesture is active, so look at
+     *    the kind before deciding what changed.
+     *
+     *    Volume: a failed write is the more useful thing to report on a frame
      *    that wrote; otherwise report how the read went. */
     if (r.out.changed && r.out.kind == GV_KIND_VOLUME)
-        r.vol = ops->set(r.out.volume); /* `changed` belongs to the active gesture; only volume's is a volume */
+        r.vol = volume->set(r.out.volume);
     else
         r.vol = get_status;
+
+    /*    Resize: take hold of the window on the frame the gesture arms, and
+     *    only then. Asking once means a window that cannot be had is not
+     *    asked for thirty times a second. */
+    const int armed_resize = r.out.state == GV_ARMED && r.out.kind == GV_KIND_RESIZE;
+    if (armed_resize && !ctx->step_resize_active) {
+        ctx->step_resize_active = 1;
+        ctx->step_acquire_status = (int)window->acquire();
+        ctx->step_window_held = (ctx->step_acquire_status == WIN_OK);
+    }
+    if (ctx->step_resize_active) {
+        /* Without a window, keep saying why for as long as the hand is up. */
+        r.win = (win_status)ctx->step_acquire_status;
+        /* Not `armed_resize &&`: a resize that rolls back says its last word
+         * on the frame it goes idle, and the window must hear it. No check of
+         * the kind is needed: from the frame a resize arms to the frame it
+         * ends, the only `changed` the core can report is that resize's. */
+        if (ctx->step_window_held && r.out.changed)
+            r.win = window->apply(r.out.scale);
+    }
+    /*    Let go AFTER that last write, never before. */
+    if (ctx->step_resize_active && !armed_resize) {
+        if (ctx->step_window_held)
+            window->release();
+        ctx->step_resize_active = 0;
+        ctx->step_window_held = 0; /* step_acquire_status is only read while active, and set afresh then */
+    }
 
     return r;
 }

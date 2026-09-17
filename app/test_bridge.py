@@ -126,6 +126,19 @@ def main() -> int:
     check(status == 0 and isinstance(name, str), f"device name readable: {name!r}")
     check(bridge.strerror(-5).startswith("the output accepted"), "status codes map to text")
 
+    # So does the window module. Nothing is held outside a resize, so the name
+    # call must say so rather than hand back a stale or empty success.
+    check(bridge.win_strerror(-3) == "the front window has a fixed size", "window status codes map to text")
+    check("Accessibility" in bridge.win_strerror(-1), "the not-trusted text says where to allow it")
+    status, name = bridge.win_target_name()
+    check(status == -2 and name == "", "no window is held outside a resize")
+
+    # The step result carries the window status, and an idle frame reports no trouble.
+    with bridge.Gesture(aspect=aspect) as g:
+        r = g.step(None, 0.0)
+        check(r.win == 0 and r.out.kind == 0 and abs(r.out.scale - 1.0) < 1e-6,
+              "an idle step: win ok, no gesture, scale 1")
+
     print(f"{'FAILED' if failures else 'passed'} ({failures} failures)")
     return 1 if failures else 0
 

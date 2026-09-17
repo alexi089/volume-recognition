@@ -417,10 +417,16 @@ gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *b)
 ```
 `gv_step` remembers, in `gv_ctx` (a new `int window_held`), whether it holds a window target.
 
-- [ ] **Step 1: Failing tests** with a recording fake window backend (counts of acquire / apply / release, last scale, a settable status): arming a resize acquires exactly once and applies nothing; a changed scale applies that scale; release (fist) releases exactly once; a failing acquire (`WIN_ERR_NOT_RESIZABLE`) is reported in `result.win` on every armed frame and nothing is applied; a failing apply is reported on that frame; a volume slide never touches the window backend and a resize never calls `volume.set`; the existing volume tests keep passing with the fake window ops present.
-- [ ] **Step 2:** run; FAIL. **Step 3:** implement: on the transition into `ARMED` with `kind == RESIZE`, `acquire`; on `changed` with that kind, `apply(out.scale)`; on leaving `ARMED`, `release` if held. Volume path unchanged. **Step 4:** pass; mutation-check "release never called" and "apply called for volume".
-- [ ] **Step 5:** `bridge.StepResult` gains `("win", C.c_int)`; `bridge.win_strerror`, `bridge.win_target_name`. **Commit** `feat(core): per-frame glue drives a window backend as well as volume`.
+- [x] **Step 1: Failing tests** with a recording fake window backend (counts of acquire / apply / release, last scale, a settable status): arming a resize acquires exactly once and applies nothing; a changed scale applies that scale; release (fist) releases exactly once; a failing acquire (`WIN_ERR_NOT_RESIZABLE`) is reported in `result.win` on every armed frame and nothing is applied; a failing apply is reported on that frame; a volume slide never touches the window backend and a resize never calls `volume.set`; the existing volume tests keep passing with the fake window ops present.
+- [x] **Step 2:** run; FAIL. **Step 3:** implement: on the transition into `ARMED` with `kind == RESIZE`, `acquire`; on `changed` with that kind, `apply(out.scale)`; on leaving `ARMED`, `release` if held. Volume path unchanged. **Step 4:** pass; mutation-check "release never called" and "apply called for volume".
+- [x] **Step 5:** `bridge.StepResult` gains `("win", C.c_int)`; `bridge.win_strerror`, `bridge.win_target_name`. **Commit** `feat(core): per-frame glue drives a window backend as well as volume`.
 
+
+**As built (2026-09-17):**
+- `gv_ctx` gains three `step_` fields, not one: whether a resize is active, whether a window is held, and how the acquire went (repeated in `result.win` while armed). `gesture.c` never reads them.
+- The write is NOT limited to armed frames: a resize that rolls back sends its last scale on the frame it goes idle (Task 5), and the glue writes it and only then releases. Test: `the_rolled_back_scale_is_written_before_the_window_is_let_go`; the fake counts writes to a window already let go.
+- Two lines written first were removed after surviving mutation as redundant: a kind check on the window write (while a resize is active the only `changed` the core can report is that resize's) and a reset of the stored acquire status (only read while active). 12 mutants remain, all killed, including the plan's two.
+- Not handled, on purpose: `gv_destroy` while a window is held leaves one retained element until the next acquire or exit.
 ---
 
 ### Task 9: Python, overlay, HUD

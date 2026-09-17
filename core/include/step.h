@@ -1,18 +1,19 @@
 /*
  * step.h - one call per camera frame: the glue between the pure gesture core
- * and the side-effecting volume module.
+ * and the modules with side effects (the volume, the front window).
  *
- * The volume backend is passed in as a pair of function pointers instead of
- * being called directly. In production that pair is the real CoreAudio
- * functions (gv_system_volume); in tests it is a fake that records calls, so
- * the glue can be tested without touching the machine's actual volume. This
- * is C's version of dependency injection.
+ * The backends are passed in as function pointers instead of being called
+ * directly. In production they are the real CoreAudio and Accessibility
+ * functions (gv_system_backends); in tests they are fakes that record calls,
+ * so the glue can be tested without touching the machine's volume or anyone's
+ * windows. This is C's version of dependency injection.
  */
 #ifndef STEP_H
 #define STEP_H
 
 #include "gesture.h"
 #include "volume.h"
+#include "window.h"
 
 typedef struct {
     /* `vol_status (*get)(float *)` reads: get is a pointer to a function
@@ -21,17 +22,39 @@ typedef struct {
     vol_status (*set)(float v);
 } gv_volume_ops;
 
-/* The real backend: { vol_get, vol_set }. */
-extern const gv_volume_ops gv_system_volume;
+typedef struct {
+    win_status (*acquire)(void);      /* take hold of the front window */
+    win_status (*apply)(float scale); /* relative to its frame at acquire */
+    void       (*release)(void);
+} gv_window_ops;
+
+typedef struct {
+    gv_volume_ops volume;
+    gv_window_ops window;
+} gv_backends;
+
+/* The real ones: { { vol_get, vol_set }, { win_acquire, win_apply, win_release } }. */
+extern const gv_backends gv_system_backends;
 
 typedef struct {
     gv_output  out;
     vol_status vol; /* result of this frame's volume call; VOL_OK if none failed */
+    /* The window side of a resize: while one is armed, how taking hold of the
+     * window went, or how this frame's write went if there was one. WIN_OK
+     * outside a resize. (Appended: the fields above keep their offsets.) */
+    win_status win;
 } gv_step_result;
 
-/* Sync the core with the current system volume, feed it the frame, and apply
- * the new volume if it changed. */
-gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_volume_ops *ops);
+/*
+ * Sync the core with the current system volume, feed it the frame, and act on
+ * what comes back:
+ *   volume:  write the new volume when it changed.
+ *   resize:  take hold of the front window on the frame the gesture arms,
+ *            write each changed scale, let go when the gesture ends. A gesture
+ *            that ends by rolling back sends one last changed scale on its
+ *            final frame; that is written BEFORE the window is let go.
+ */
+gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *backends);
 
 /* gv_step with the real backend; what the Python side calls. */
 gv_step_result gv_step_system(gv_ctx *ctx, const gv_frame *frame);

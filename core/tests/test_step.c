@@ -1,6 +1,6 @@
 /*
- * Tests for the per-frame glue, run against a fake volume backend so the
- * machine's real volume is never touched.
+ * Tests for the per-frame glue, run against fake backends so the machine's
+ * real volume and real windows are never touched.
  */
 #include "test.h"
 
@@ -38,7 +38,39 @@ static vol_status fake_set(float v)
     return fake_set_status;
 }
 
-static const gv_volume_ops fake_ops = { fake_get, fake_set };
+/* The window fake records what was asked of it, in order. */
+static win_status fake_acquire_status;
+static win_status fake_apply_status;
+static int        fake_acquire_calls;
+static int        fake_apply_calls;
+static int        fake_release_calls;
+static float      fake_last_scale;
+static int        fake_applies_after_release; /* a write to a window already let go is a bug */
+static int        fake_window_held;
+
+static win_status fake_acquire(void)
+{
+    fake_acquire_calls++;
+    fake_window_held = (fake_acquire_status == WIN_OK);
+    return fake_acquire_status;
+}
+
+static win_status fake_apply(float scale)
+{
+    fake_apply_calls++;
+    fake_last_scale = scale;
+    if (!fake_window_held)
+        fake_applies_after_release++;
+    return fake_apply_status;
+}
+
+static void fake_release(void)
+{
+    fake_release_calls++;
+    fake_window_held = 0;
+}
+
+static const gv_backends fake_ops = { { fake_get, fake_set }, { fake_acquire, fake_apply, fake_release } };
 
 static void fake_reset(float volume)
 {
@@ -48,6 +80,12 @@ static void fake_reset(float volume)
     fake_get_calls = 0;
     fake_set_calls = 0;
     fake_last_set = -1.0f;
+    fake_acquire_status = WIN_OK;
+    fake_apply_status = WIN_OK;
+    fake_acquire_calls = fake_apply_calls = fake_release_calls = 0;
+    fake_last_scale = -1.0f;
+    fake_applies_after_release = 0;
+    fake_window_held = 0;
 }
 
 /* --- driving frames ----------------------------------------------------- */
@@ -151,6 +189,180 @@ static void an_output_without_volume_control_is_reported_while_idle(void)
     gv_destroy(ctx);
 }
 
+/* --- the window side ----------------------------------------------------- */
+
+static gv_ctx *start_real(void)
+{
+    gv_config cfg = gv_default_config();
+    cfg.aspect = FIXTURE_REAL_ASPECT;
+    now = 0.0;
+    return gv_create(&cfg);
+}
+
+static void step_frame(gv_ctx *ctx, const gv_frame *hand)
+{
+    gv_frame f = { 0 };
+    if (hand != NULL)
+        f = *hand;
+    f.t_sec = now;
+    last = gv_step(ctx, &f, &fake_ops);
+    now += DT;
+}
+
+static void step_pinch(gv_ctx *ctx, float from, float to, double seconds)
+{
+    int n = (int)(seconds / DT + 0.5);
+    for (int i = 1; i <= n; i++) {
+        gv_frame f = pinch(from + (to - from) * (float)i / (float)n);
+        step_frame(ctx, &f);
+    }
+}
+
+static void arming_a_resize_takes_hold_of_the_window_once_and_writes_nothing(void)
+{
+    fake_reset(0.40f);
+    gv_ctx *ctx = start_real();
+    step_pinch(ctx, 0.0f, 0.0f, 0.2);
+    CHECK(last.out.state == GV_ARMING);
+    CHECK(fake_acquire_calls == 0); /* not while still arming */
+    step_pinch(ctx, 0.0f, 0.0f, 0.8);
+    CHECK(last.out.state == GV_ARMED && last.out.kind == GV_KIND_RESIZE);
+    CHECK(fake_acquire_calls == 1);
+    CHECK(fake_apply_calls == 0);
+    CHECK(fake_release_calls == 0);
+    CHECK(last.win == WIN_OK);
+    gv_destroy(ctx);
+}
+
+static void a_changed_scale_is_written_to_the_window(void)
+{
+    fake_reset(0.40f);
+    gv_ctx *ctx = start_real();
+    step_pinch(ctx, 0.0f, 0.0f, 0.5);
+    step_pinch(ctx, 0.0f, 0.2f, 0.5);
+    step_pinch(ctx, 0.2f, 0.2f, 0.5);
+    CHECK(fake_apply_calls > 0);
+    CHECK_NEAR(fake_last_scale, last.out.scale, 1e-6); /* the latest scale, not a stale one */
+    CHECK(last.out.scale < 0.9f);
+    CHECK(fake_acquire_calls == 1);                    /* still the same window */
+    gv_destroy(ctx);
+}
+
+/* Closing the hand ends the resize with one last, rolled-back scale, on a frame
+ * whose state is already IDLE. It has to reach the window, and only then is
+ * the window let go. */
+static void the_rolled_back_scale_is_written_before_the_window_is_let_go(void)
+{
+    fake_reset(0.40f);
+    gv_ctx *ctx = start_real();
+    step_pinch(ctx, 0.0f, 0.0f, 0.5);
+    step_pinch(ctx, 0.0f, 0.2f, 0.5);
+    step_pinch(ctx, 0.2f, 0.2f, 0.6);
+    float set = last.out.scale;
+
+    gv_frame from = pinch(0.2f), fist = aligned_to(&fixture_real_fist, &fixture_real_pinch_open);
+    float lowest_written = set;
+    for (int i = 1; i <= 21; i++) { /* 0.2 s closing into the recorded fist, then held */
+        float k = i <= 6 ? (float)i / 6.0f : 1.0f;
+        gv_frame f = from;
+        for (int j = 0; j < GV_NUM_LANDMARKS; j++) {
+            f.lm[j].x = from.lm[j].x + (fist.lm[j].x - from.lm[j].x) * k;
+            f.lm[j].y = from.lm[j].y + (fist.lm[j].y - from.lm[j].y) * k;
+        }
+        step_frame(ctx, &f);
+        if (fake_last_scale < lowest_written)
+            lowest_written = fake_last_scale;
+    }
+    CHECK(last.out.state == GV_IDLE);
+    CHECK(lowest_written < set - 0.01f);          /* the closing hand did drag the window down ... */
+    CHECK_NEAR(fake_last_scale, set, 0.015);      /* ... and the last write put it back */
+    CHECK(fake_release_calls == 1);
+    CHECK(fake_applies_after_release == 0);
+    gv_destroy(ctx);
+}
+
+static void a_hand_that_leaves_lets_go_of_the_window_once(void)
+{
+    fake_reset(0.40f);
+    gv_ctx *ctx = start_real();
+    step_pinch(ctx, 0.0f, 0.0f, 0.5);
+    step_pinch(ctx, 0.0f, 0.2f, 0.5);
+    int writes = fake_apply_calls;
+    for (int i = 0; i < 30; i++)
+        step_frame(ctx, NULL);
+    CHECK(last.out.state == GV_IDLE);
+    CHECK(fake_release_calls == 1);
+    CHECK(fake_apply_calls == writes); /* nothing rolled back, nothing written */
+    CHECK(last.win == WIN_OK);
+
+    step_pinch(ctx, 0.0f, 0.0f, 0.5);  /* and the next resize takes hold afresh */
+    CHECK(fake_acquire_calls == 2);
+    gv_destroy(ctx);
+}
+
+/* A window that cannot be resized: said on every armed frame (the overlay shows
+ * it for as long as the hand is up), and nothing is written or let go. */
+static void a_window_that_cannot_be_taken_is_reported_and_left_alone(void)
+{
+    fake_reset(0.40f);
+    fake_acquire_status = WIN_ERR_NOT_RESIZABLE;
+    gv_ctx *ctx = start_real();
+    step_pinch(ctx, 0.0f, 0.0f, 0.5);
+    CHECK(last.out.state == GV_ARMED);
+    CHECK(last.win == WIN_ERR_NOT_RESIZABLE);
+    int armed_frames = 0, reported = 0;
+    for (int i = 1; i <= 30; i++) {
+        gv_frame f = pinch(0.2f * (float)i / 30.0f);
+        step_frame(ctx, &f);
+        if (last.out.state == GV_ARMED) {
+            armed_frames++;
+            reported += (last.win == WIN_ERR_NOT_RESIZABLE);
+        }
+    }
+    CHECK(armed_frames == 30 && reported == 30);
+    CHECK(fake_acquire_calls == 1); /* asked once, not once a frame */
+    CHECK(fake_apply_calls == 0);
+    for (int i = 0; i < 30; i++)
+        step_frame(ctx, NULL);
+    CHECK(fake_release_calls == 0); /* nothing was held */
+    CHECK(last.win == WIN_OK);      /* and the complaint ends with the gesture */
+    gv_destroy(ctx);
+}
+
+static void a_failing_write_is_reported_on_that_frame(void)
+{
+    fake_reset(0.40f);
+    gv_ctx *ctx = start_real();
+    step_pinch(ctx, 0.0f, 0.0f, 0.5);
+    fake_apply_status = WIN_ERR_IGNORED;
+    int failed_writes = 0, reported = 0;
+    for (int i = 1; i <= 30; i++) {
+        gv_frame f = pinch(0.2f * (float)i / 30.0f);
+        int before = fake_apply_calls;
+        step_frame(ctx, &f);
+        if (fake_apply_calls > before) {
+            failed_writes++;
+            reported += (last.win == WIN_ERR_IGNORED);
+        } else {
+            CHECK(last.win == WIN_OK); /* a frame that wrote nothing has nothing to complain about */
+        }
+    }
+    CHECK(failed_writes > 0 && reported == failed_writes);
+    gv_destroy(ctx);
+}
+
+static void a_volume_slide_never_touches_the_window(void)
+{
+    fake_reset(0.30f);
+    gv_ctx *ctx = start();
+    run(ctx, &fixture_victory, 0.0f, 0.0f, 0.5);
+    run(ctx, &fixture_victory, 0.0f, 1.5f, 1.0);
+    CHECK(fake_set_calls > 0);
+    CHECK(fake_acquire_calls == 0 && fake_apply_calls == 0 && fake_release_calls == 0);
+    CHECK(last.win == WIN_OK);
+    gv_destroy(ctx);
+}
+
 /* `changed` belongs to whichever gesture is armed. A resize that changes its
  * scale must never reach the volume backend: the output's `volume` field is
  * not what moved. */
@@ -188,5 +400,12 @@ int main(void)
     RUN(the_status_of_a_failing_write_is_on_that_frames_result);
     RUN(an_output_without_volume_control_is_reported_while_idle);
     RUN(a_resize_never_writes_the_volume);
+    RUN(arming_a_resize_takes_hold_of_the_window_once_and_writes_nothing);
+    RUN(a_changed_scale_is_written_to_the_window);
+    RUN(the_rolled_back_scale_is_written_before_the_window_is_let_go);
+    RUN(a_hand_that_leaves_lets_go_of_the_window_once);
+    RUN(a_window_that_cannot_be_taken_is_reported_and_left_alone);
+    RUN(a_failing_write_is_reported_on_that_frame);
+    RUN(a_volume_slide_never_touches_the_window);
     return TEST_SUMMARY();
 }

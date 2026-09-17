@@ -88,7 +88,7 @@ class Config(C.Structure):
 
 
 class StepResult(C.Structure):
-    _fields_ = [("out", Output), ("vol", C.c_int)]
+    _fields_ = [("out", Output), ("vol", C.c_int), ("win", C.c_int)]
 
 
 def _load() -> C.CDLL:
@@ -116,6 +116,10 @@ def _load() -> C.CDLL:
     lib.vol_strerror.argtypes = [C.c_int]
     lib.vol_device_name.restype = C.c_int
     lib.vol_device_name.argtypes = [C.c_char_p, C.c_size_t]
+    lib.win_strerror.restype = C.c_char_p
+    lib.win_strerror.argtypes = [C.c_int]
+    lib.win_target_name.restype = C.c_int
+    lib.win_target_name.argtypes = [C.c_char_p, C.c_size_t]
     for fn in (lib.gv_abi_frame_size, lib.gv_abi_config_size, lib.gv_abi_step_result_size):
         fn.restype = C.c_uint
         fn.argtypes = []
@@ -144,6 +148,17 @@ def strerror(status: int) -> str:
 def device_name() -> tuple[int, str]:
     buf = C.create_string_buffer(128)
     status = _lib.vol_device_name(buf, len(buf))
+    return status, buf.value.decode(errors="replace")
+
+
+def win_strerror(status: int) -> str:
+    return _lib.win_strerror(status).decode()
+
+
+def win_target_name() -> tuple[int, str]:
+    """The app whose window a resize holds; (-2, "") when none is held."""
+    buf = C.create_string_buffer(128)
+    status = _lib.win_target_name(buf, len(buf))
     return status, buf.value.decode(errors="replace")
 
 
