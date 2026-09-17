@@ -1,12 +1,18 @@
-"""Webcam -> MediaPipe hand landmarks -> on-screen overlay.
+"""Webcam -> MediaPipe hand landmarks -> C gesture core -> system volume.
 
-Spike for step 1 of the build: proves the camera opens, MediaPipe returns 21
-landmarks per frame, and shows the frame rate. No gesture logic lives here, and
-none ever will: this file is a pipe between the camera and the C core.
+This file is a pipe. It moves frames from the camera to MediaPipe, landmarks
+from MediaPipe to the C library, and the C library's answer to the screen. All
+gesture logic and the volume call itself live in core/ (C).
 
-Run with `make run`. Quit with q or Esc.
+    make run                      run with the preview window and the HUD
+    make run ARGS="--record traces/slide_up.csv"
+
+Quit with q or Esc in the preview window, or Ctrl-C.
 """
 
+import argparse
+import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -15,11 +21,16 @@ import cv2
 import mediapipe as mp
 from mediapipe.tasks.python import BaseOptions, vision
 
-MODEL_PATH = Path(__file__).parent / "models" / "hand_landmarker.task"
+import bridge
+
+ROOT = Path(__file__).resolve().parents[1]
+MODEL_PATH = ROOT / "app" / "models" / "hand_landmarker.task"
+HUD_PATH = ROOT / "hud" / "build" / "volume-hud"
 CONNECTIONS = [(c.start, c.end) for c in vision.HandLandmarksConnections.HAND_CONNECTIONS]
+STATE_COLOURS = {bridge.IDLE: (160, 160, 160), bridge.ARMING: (0, 200, 255), bridge.ARMED: (80, 220, 80)}
 
 
-def make_landmarker() -> vision.HandLandmarker:
+def make_landmarker(image_mode: bool = False) -> vision.HandLandmarker:
     if not MODEL_PATH.exists():
         sys.exit(f"Model file missing: {MODEL_PATH}\nRun `make model` to download it.")
     options = vision.HandLandmarkerOptions(
@@ -29,16 +40,17 @@ def make_landmarker() -> vision.HandLandmarker:
             # ("DrishtiMetalHelper ... Service is unavailable"). Metal works.
             delegate=BaseOptions.Delegate.GPU,
         ),
-        running_mode=vision.RunningMode.VIDEO,
+        running_mode=vision.RunningMode.IMAGE if image_mode else vision.RunningMode.VIDEO,
         num_hands=1,
     )
     return vision.HandLandmarker.create_from_options(options)
 
 
-def open_camera(index: int = 0) -> cv2.VideoCapture:
+def open_camera(index: int) -> cv2.VideoCapture:
     cap = cv2.VideoCapture(index)
     ok, _ = cap.read() if cap.isOpened() else (False, None)
     if not ok:
+        cap.release()
         sys.exit(
             "Could not read from the camera.\n"
             "macOS grants camera access per app: allow it for the app hosting this\n"
@@ -48,57 +60,167 @@ def open_camera(index: int = 0) -> cv2.VideoCapture:
     return cap
 
 
-def draw_hand(frame, landmarks) -> None:
+class Hud:
+    """Feeds the native HUD process one JSON line per frame. Optional: if the
+    binary is not built, or it exits, the app carries on without it."""
+
+    def __init__(self, enabled: bool):
+        self._proc = None
+        if not enabled:
+            return
+        if not HUD_PATH.exists():
+            print(f"HUD not built ({HUD_PATH.relative_to(ROOT)}); run `make -C hud`. Continuing without it.")
+            return
+        self._proc = subprocess.Popen([str(HUD_PATH)], stdin=subprocess.PIPE, text=True)
+
+    def send(self, state: int, volume: float, error: str | None) -> None:
+        if self._proc is None:
+            return
+        try:
+            self._proc.stdin.write(
+                json.dumps({"state": bridge.STATE_NAMES[state], "volume": round(volume, 4), "error": error}) + "\n"
+            )
+            self._proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            print("HUD process exited; continuing without it.")
+            self._proc = None
+
+    def close(self) -> None:
+        if self._proc is None:
+            return
+        try:
+            self._proc.stdin.close()  # EOF is the HUD's signal to quit
+            self._proc.wait(timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            self._proc.kill()
+        self._proc = None
+
+
+class Recorder:
+    """Writes every frame's landmarks to CSV for core/tests/replay.c."""
+
+    def __init__(self, path: str | None, aspect: float):
+        self._file = None
+        if path is None:
+            return
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self._file = open(path, "w")
+        self._file.write(f"# aspect={aspect:.6f}\n")
+        cols = ",".join(f"x{i},y{i},z{i}" for i in range(bridge.NUM_LANDMARKS))
+        self._file.write(f"t_sec,present,{cols}\n")
+
+    def write(self, t_sec: float, landmarks) -> None:
+        if self._file is None:
+            return
+        if landmarks:
+            values = ",".join(f"{p.x:.6f},{p.y:.6f},{p.z:.6f}" for p in landmarks)
+        else:
+            values = ",".join(["0"] * (3 * bridge.NUM_LANDMARKS))
+        self._file.write(f"{t_sec:.6f},{1 if landmarks else 0},{values}\n")
+
+    def close(self) -> None:
+        if self._file is not None:
+            self._file.close()
+            self._file = None
+
+
+def draw_overlay(frame, landmarks, state: int, volume: float, error: str | None, fps: float) -> None:
     h, w = frame.shape[:2]
-    pts = [(int(p.x * w), int(p.y * h)) for p in landmarks]
-    for a, b in CONNECTIONS:
-        cv2.line(frame, pts[a], pts[b], (80, 200, 80), 2)
-    for x, y in pts:
-        cv2.circle(frame, (x, y), 4, (255, 255, 255), -1)
+    colour = STATE_COLOURS[state]
+    if landmarks:
+        pts = [(int(p.x * w), int(p.y * h)) for p in landmarks]
+        for a, b in CONNECTIONS:
+            cv2.line(frame, pts[a], pts[b], colour, 2)
+        for x, y in pts:
+            cv2.circle(frame, (x, y), 4, (255, 255, 255), -1)
+
+    cv2.putText(frame, f"{bridge.STATE_NAMES[state].upper()}  {fps:4.1f} fps", (12, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, colour, 2)
+
+    bar_w, bar_h, x0, y0 = w - 24, 14, 12, h - 30
+    cv2.rectangle(frame, (x0, y0), (x0 + bar_w, y0 + bar_h), (60, 60, 60), -1)
+    cv2.rectangle(frame, (x0, y0), (x0 + int(bar_w * volume), y0 + bar_h), colour, -1)
+    cv2.putText(frame, f"{round(volume * 100)}%", (x0, y0 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+    if error:
+        cv2.putText(frame, error, (12, 62), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (60, 60, 255), 2)
+
+
+def describe_error(status: int) -> str | None:
+    if status == bridge.VOL_OK:
+        return None
+    _, name = bridge.device_name()
+    return f"{bridge.strerror(status)} ({name.strip()})" if name.strip() else bridge.strerror(status)
 
 
 def main() -> None:
-    cap = open_camera()
-    start = time.monotonic()
-    last_ts_ms = -1
-    fps, last_frame_t = 0.0, start
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--camera", type=int, default=0, help="camera index (default 0)")
+    parser.add_argument("--record", metavar="CSV", help="also write landmarks to this file")
+    parser.add_argument("--no-hud", action="store_true", help="do not launch the native HUD")
+    parser.add_argument("--no-preview", action="store_true", help="do not show the camera preview window")
+    args = parser.parse_args()
 
-    with make_landmarker() as landmarker:
-        while True:
-            ok, bgr = cap.read()
-            if not ok:
-                sys.exit("Camera stopped delivering frames.")
+    cap = open_camera(args.camera)
+    hud = recorder = None
+    try:
+        ok, first = cap.read()
+        if not ok:
+            sys.exit("Camera stopped delivering frames.")
+        aspect = first.shape[1] / first.shape[0]
 
-            # Selfie view: the user's right is +x, and the preview reads like a mirror.
-            bgr = cv2.flip(bgr, 1)
+        hud = Hud(enabled=not args.no_hud)
+        recorder = Recorder(args.record, aspect)
+        start = time.monotonic()
+        last_ts_ms, fps, last_frame_t = -1, 0.0, start
 
-            # VIDEO mode requires strictly increasing integer timestamps.
-            now = time.monotonic()
-            ts_ms = max(int((now - start) * 1000), last_ts_ms + 1)
-            last_ts_ms = ts_ms
+        with make_landmarker() as landmarker, bridge.Gesture(aspect) as gesture:
+            while True:
+                ok, bgr = cap.read()
+                if not ok:
+                    sys.exit("Camera stopped delivering frames.")
 
-            # The Metal delegate only accepts 4-channel images.
-            rgba = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGBA)
-            result = landmarker.detect_for_video(
-                mp.Image(image_format=mp.ImageFormat.SRGBA, data=rgba), ts_ms
-            )
+                # Selfie view: the user's right is +x, and the preview reads like a mirror.
+                bgr = cv2.flip(bgr, 1)
 
-            if result.hand_landmarks:
-                draw_hand(bgr, result.hand_landmarks[0])
+                # VIDEO mode requires strictly increasing integer timestamps.
+                now = time.monotonic()
+                ts_ms = max(int((now - start) * 1000), last_ts_ms + 1)
+                last_ts_ms = ts_ms
 
-            dt = now - last_frame_t
-            last_frame_t = now
-            if dt > 0:
-                fps = 0.9 * fps + 0.1 * (1.0 / dt)
-            label = f"{fps:4.1f} fps   hand: {'yes' if result.hand_landmarks else 'no'}"
-            cv2.putText(bgr, label, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                # The Metal delegate only accepts 4-channel images.
+                rgba = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGBA)
+                result = landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGBA, data=rgba), ts_ms)
+                landmarks = result.hand_landmarks[0] if result.hand_landmarks else None
 
-            cv2.imshow("volume gesture", bgr)
-            if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
-                break
+                t_sec = now - start
+                step = gesture.step(landmarks, t_sec)
+                error = describe_error(step.vol)
 
-    cap.release()
-    cv2.destroyAllWindows()
+                recorder.write(t_sec, landmarks)
+                hud.send(step.out.state, step.out.volume, error)
+
+                dt = now - last_frame_t
+                last_frame_t = now
+                if dt > 0:
+                    fps = 0.9 * fps + 0.1 * (1.0 / dt)
+
+                if args.no_preview:
+                    continue
+                draw_overlay(bgr, landmarks, step.out.state, step.out.volume, error, fps)
+                cv2.imshow("volume gesture", bgr)
+                if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+                    break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # Runs on every way out, including sys.exit and Ctrl-C.
+        if recorder is not None:
+            recorder.close()
+        if hud is not None:
+            hud.close()
+        cap.release()
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":

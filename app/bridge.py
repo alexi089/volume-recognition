@@ -1,0 +1,156 @@
+"""ctypes binding to core/build/libgesture.dylib.
+
+Everything here is plumbing: struct layouts that mirror the C headers, function
+signatures, and a thin wrapper that owns the C context. No gesture logic.
+
+The struct definitions below MUST match core/include/gesture.h and step.h
+field for field. ctypes cannot check that, so the library exports the sizes it
+was compiled with and `_check_abi` compares them at import time; a mismatch
+would otherwise show up as quietly corrupted values.
+"""
+
+import ctypes as C
+from pathlib import Path
+
+LIB_PATH = Path(__file__).resolve().parents[1] / "core" / "build" / "libgesture.dylib"
+
+NUM_LANDMARKS = 21
+IDLE, ARMING, ARMED = 0, 1, 2
+STATE_NAMES = {IDLE: "idle", ARMING: "arming", ARMED: "armed"}
+VOL_OK = 0
+
+
+class Point(C.Structure):
+    _fields_ = [("x", C.c_float), ("y", C.c_float), ("z", C.c_float)]
+
+
+class Frame(C.Structure):
+    _fields_ = [
+        ("lm", Point * NUM_LANDMARKS),
+        ("present", C.c_int),
+        ("t_sec", C.c_double),
+    ]
+
+
+class Output(C.Structure):
+    _fields_ = [("state", C.c_int), ("volume", C.c_float), ("changed", C.c_int)]
+
+
+class Config(C.Structure):
+    _fields_ = [
+        ("aspect", C.c_float),
+        ("finger_ratio", C.c_float),
+        ("arm_hold_sec", C.c_float),
+        ("release_grace_sec", C.c_float),
+        ("gain", C.c_float),
+        ("dead_band", C.c_float),
+        ("filter_min_cutoff", C.c_float),
+        ("filter_beta", C.c_float),
+        ("filter_d_cutoff", C.c_float),
+    ]
+
+
+class StepResult(C.Structure):
+    _fields_ = [("out", Output), ("vol", C.c_int)]
+
+
+def _load() -> C.CDLL:
+    if not LIB_PATH.exists():
+        raise SystemExit(f"{LIB_PATH} not found. Build it with `make -C core`.")
+    lib = C.CDLL(str(LIB_PATH))
+
+    # Without restype/argtypes ctypes assumes every function takes and returns
+    # int, which truncates pointers and mangles floats and structs.
+    lib.gv_default_config.restype = Config
+    lib.gv_default_config.argtypes = []
+    lib.gv_create.restype = C.c_void_p
+    lib.gv_create.argtypes = [C.POINTER(Config)]
+    lib.gv_destroy.restype = None
+    lib.gv_destroy.argtypes = [C.c_void_p]
+    lib.gv_set_current_volume.restype = None
+    lib.gv_set_current_volume.argtypes = [C.c_void_p, C.c_float]
+    lib.gv_update.restype = Output
+    lib.gv_update.argtypes = [C.c_void_p, C.POINTER(Frame)]
+    lib.gv_step_system.restype = StepResult
+    lib.gv_step_system.argtypes = [C.c_void_p, C.POINTER(Frame)]
+    lib.gv_hand_scale.restype = C.c_float
+    lib.gv_hand_scale.argtypes = [C.POINTER(Frame), C.c_float]
+    lib.vol_strerror.restype = C.c_char_p
+    lib.vol_strerror.argtypes = [C.c_int]
+    lib.vol_device_name.restype = C.c_int
+    lib.vol_device_name.argtypes = [C.c_char_p, C.c_size_t]
+    for fn in (lib.gv_abi_frame_size, lib.gv_abi_config_size, lib.gv_abi_step_result_size):
+        fn.restype = C.c_uint
+        fn.argtypes = []
+    return lib
+
+
+def _check_abi(lib: C.CDLL) -> None:
+    pairs = [
+        ("gv_frame", lib.gv_abi_frame_size(), C.sizeof(Frame)),
+        ("gv_config", lib.gv_abi_config_size(), C.sizeof(Config)),
+        ("gv_step_result", lib.gv_abi_step_result_size(), C.sizeof(StepResult)),
+    ]
+    bad = [f"{name}: C has {c} bytes, Python has {py}" for name, c, py in pairs if c != py]
+    if bad:
+        raise SystemExit("bridge.py is out of step with the C headers:\n  " + "\n  ".join(bad))
+
+
+_lib = _load()
+_check_abi(_lib)
+
+
+def strerror(status: int) -> str:
+    return _lib.vol_strerror(status).decode()
+
+
+def device_name() -> tuple[int, str]:
+    buf = C.create_string_buffer(128)
+    status = _lib.vol_device_name(buf, len(buf))
+    return status, buf.value.decode(errors="replace")
+
+
+def _fill(frame: Frame, landmarks, t_sec: float) -> None:
+    frame.t_sec = t_sec
+    frame.present = 1 if landmarks else 0
+    if landmarks:
+        for i, p in enumerate(landmarks):
+            frame.lm[i].x, frame.lm[i].y, frame.lm[i].z = p.x, p.y, p.z
+
+
+class Gesture:
+    """Owns one C gv_ctx. Use as a context manager so it is always destroyed."""
+
+    def __init__(self, aspect: float):
+        cfg = _lib.gv_default_config()
+        cfg.aspect = aspect
+        self._ctx = _lib.gv_create(C.byref(cfg))
+        if not self._ctx:
+            raise MemoryError("gv_create returned NULL")
+        self._aspect = aspect
+        self._frame = Frame()  # reused every call; the C side only reads it
+
+    def __enter__(self) -> "Gesture":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        _lib.gv_destroy(self._ctx)
+        self._ctx = None
+
+    def step(self, landmarks, t_sec: float) -> StepResult:
+        """One camera frame: sync with system volume, update, apply."""
+        _fill(self._frame, landmarks, t_sec)
+        return _lib.gv_step_system(self._ctx, C.byref(self._frame))
+
+    def update(self, landmarks, t_sec: float) -> Output:
+        """The pure state machine only; never touches the system volume."""
+        _fill(self._frame, landmarks, t_sec)
+        return _lib.gv_update(self._ctx, C.byref(self._frame))
+
+    def set_current_volume(self, volume: float) -> None:
+        _lib.gv_set_current_volume(self._ctx, volume)
+
+    def hand_scale(self, landmarks) -> float:
+        frame = Frame()
+        _fill(frame, landmarks, 0.0)
+        return _lib.gv_hand_scale(C.byref(frame), self._aspect)

@@ -2,7 +2,7 @@ PY        := .venv/bin/python
 MODEL     := app/models/hand_landmarker.task
 MODEL_URL := https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
 
-.PHONY: setup model run
+.PHONY: setup model core test run
 
 # The stamp file is written only after the install succeeds. Depending on
 # .venv/bin/python instead would treat a venv whose install failed half-way as
@@ -22,5 +22,15 @@ $(MODEL):
 	mkdir -p $(dir $(MODEL))
 	curl -sSfL -o $(MODEL) $(MODEL_URL)
 
-run: setup
-	$(PY) app/main.py
+core:
+	$(MAKE) -C core all
+
+# C unit tests (under ASan + UBSan), then the Python <-> C end-to-end test.
+# Neither touches the camera or the real system volume.
+test: setup core
+	$(MAKE) -C core test
+	$(PY) app/test_bridge.py
+
+# Extra arguments: make run ARGS="--record traces/slide_up.csv"
+run: setup core
+	$(PY) app/main.py $(ARGS)
