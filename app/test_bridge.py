@@ -37,17 +37,18 @@ def landmarks_from_photo(landmarker, name: str):
 
 
 class Shifted:
-    """A landmark moved sideways; quacks like MediaPipe's NormalizedLandmark."""
+    """A landmark moved by (dx, dy); quacks like MediaPipe's NormalizedLandmark."""
 
-    def __init__(self, p, dx):
-        self.x, self.y, self.z = p.x + dx, p.y, p.z
+    def __init__(self, p, dx, dy=0.0):
+        self.x, self.y, self.z = p.x + dx, p.y + dy, p.z
 
 
-def run(gesture, hand, offsets, t):
-    """Feed one frame per offset (in normalised x); returns (last output, t)."""
+def run(gesture, hand, offsets, t, vertical=False):
+    """Feed one frame per offset (normalised units, along x or y); returns (last output, t)."""
     out = None
-    for dx in offsets:
-        out = gesture.update([Shifted(p, dx) for p in hand] if hand else None, t)
+    for d in offsets:
+        moved = [Shifted(p, 0.0, d) if vertical else Shifted(p, d) for p in hand] if hand else None
+        out = gesture.update(moved, t)
         t += DT
     return out, t
 
@@ -59,8 +60,10 @@ def main() -> int:
         thumbs_up, _ = landmarks_from_photo(landmarker, "thumbs_up")
 
     # A real hand, held still, arms; sliding it right raises the volume.
-    # gain pinned: the expected volume below is arithmetic on it, not on the tuned default
-    with bridge.Gesture(aspect=aspect, gain=1 / 3) as g:
+    # gain and lock distance pinned: the expected volumes below are arithmetic on
+    # them, not on the tuned defaults. A slide of h hand-lengths is worth gain * (h - lock).
+    pinned = {"gain": 1 / 3, "gain_fast": 1 / 3, "axis_lock_hands": 0.5}  # flat gain: speed makes no difference
+    with bridge.Gesture(aspect=aspect, **pinned) as g:
         g.set_current_volume(0.30)
         out, t = run(g, victory, [0.0] * 15, 0.0)
         check(out.state == bridge.ARMED, "victory photo arms after half a second")
@@ -69,11 +72,23 @@ def main() -> int:
         hand = g.hand_scale(victory) / aspect  # one hand-length, in normalised x
         slide = [1.5 * hand * i / 18 for i in range(1, 19)] + [1.5 * hand] * 15
         out, t = run(g, victory, slide, t)
-        check(abs(out.volume - 0.80) < 0.02, f"1.5 hand-lengths right: 0.30 -> {out.volume:.3f} (want 0.80)")
+        want = 0.30 + (1.5 - 0.5) / 3
+        check(abs(out.volume - want) < 0.02, f"1.5 hand-lengths right: 0.30 -> {out.volume:.3f} (want {want:.3f})")
+        check(out.axis == bridge.AXIS_X, "the slide was taken as left/right")
 
         out, t = run(g, None, [0.0] * 10, t)
         check(out.state == bridge.IDLE, "losing the hand releases")
-        check(abs(out.volume - 0.80) < 0.02, "and the volume stays where it was left")
+        check(abs(out.volume - want) < 0.02, "and the volume stays where it was left")
+
+    # Up is louder. Image y grows downwards, so "up" is a negative y offset here.
+    with bridge.Gesture(aspect=aspect, **pinned) as g:
+        g.set_current_volume(0.30)
+        out, t = run(g, victory, [0.0] * 15, 0.0)
+        hand_y = g.hand_scale(victory)  # one hand-length, in normalised y (frame heights)
+        climb = [-1.5 * hand_y * i / 18 for i in range(1, 19)] + [-1.5 * hand_y] * 15
+        out, t = run(g, victory, climb, t, vertical=True)
+        check(out.axis == bridge.AXIS_Y, "a vertical slide is taken as up/down")
+        check(abs(out.volume - want) < 0.02, f"1.5 hand-lengths up: 0.30 -> {out.volume:.3f} (want {want:.3f})")
 
     # A different hand shape never arms, wherever it goes.
     with bridge.Gesture(aspect=aspect) as g:

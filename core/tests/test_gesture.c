@@ -12,9 +12,18 @@
 #define ASPECT 1.0f /* the fixture photos are square */
 #define REAL   FIXTURE_REAL_ASPECT /* the frames from the live recording are 16:9 */
 
-/* The tests pin the gain. Expected volumes below are arithmetic on this value,
- * and the shipped default is a tuning choice that must be free to change. */
+/* The tests pin the gain, and pin it FLAT (the same slow and fast, so speed
+ * makes no difference). Expected volumes below are arithmetic on this value;
+ * the shipped defaults are tuning choices that must be free to change. The
+ * speed-dependent part has its own tests, with its own pinned numbers. */
 #define GAIN (1.0f / 3.0f)
+
+/* Nothing moves until the hand has travelled LOCK hand-lengths along one axis
+ * (see "which way is the slider" below); travel is counted from there. So a
+ * slide of h hand-lengths is worth GAIN * (h - LOCK). Pinned, like the gain. */
+#define LOCK 0.5f
+#define AFTER(start, hands) ((start) + GAIN * ((hands) - LOCK))
+#define BEFORE(start, hands) ((start) - GAIN * ((hands) - LOCK))
 
 typedef struct {
     gv_ctx   *ctx;
@@ -32,6 +41,8 @@ static session start_with_aspect(float system_volume, float aspect)
     gv_config cfg = gv_default_config();
     cfg.aspect = aspect;
     cfg.gain = GAIN;
+    cfg.gain_fast = GAIN;
+    cfg.axis_lock_hands = LOCK;
     session s = { 0 };
     s.aspect = aspect;
     s.ctx = gv_create(&cfg);
@@ -48,16 +59,20 @@ static void finish(session *s)
     s->ctx = NULL;
 }
 
-/* One frame. hand = NULL means "no hand in view". offset is how far the hand
- * has been slid from its position in the photo, in hand-lengths (+ = right). */
-static void frame(session *s, const gv_frame *hand, float offset)
+/* One frame. hand = NULL means "no hand in view". The offsets are how far the
+ * hand has been moved from its position in the photo, in hand-lengths:
+ * right is +, UP is + (image y grows downwards, hence the minus below). */
+static void frame_xy(session *s, const gv_frame *hand, float right, float up)
 {
     gv_frame f = { 0 };
     if (hand != NULL) {
         f = *hand;
-        float dx = offset * gv_hand_scale(hand, s->aspect) / s->aspect;
-        for (int i = 0; i < GV_NUM_LANDMARKS; i++)
+        float dx = right * gv_hand_scale(hand, s->aspect) / s->aspect;
+        float dy = -up * gv_hand_scale(hand, s->aspect);
+        for (int i = 0; i < GV_NUM_LANDMARKS; i++) {
             f.lm[i].x += dx;
+            f.lm[i].y += dy;
+        }
     }
     f.t_sec = s->t;
     gv_state before = s->out.state;
@@ -72,6 +87,29 @@ static void frame(session *s, const gv_frame *hand, float offset)
     if (s->out.state == GV_ARMED)
         s->ever_armed = 1;
     s->t += DT;
+}
+
+static void frame(session *s, const gv_frame *hand, float right)
+{
+    frame_xy(s, hand, right, 0.0f);
+}
+
+/* Move in a straight line from (x0, y0) to (x1, y1), in hand-lengths. */
+static void slide_xy(session *s, const gv_frame *hand, float x0, float y0, float x1, float y1,
+                     double seconds)
+{
+    int n = (int)(seconds / DT + 0.5);
+    for (int i = 1; i <= n; i++) {
+        float k = (float)i / (float)n;
+        frame_xy(s, hand, x0 + (x1 - x0) * k, y0 + (y1 - y0) * k);
+    }
+}
+
+static void hold_xy(session *s, const gv_frame *hand, float right, float up, double seconds)
+{
+    int n = (int)(seconds / DT + 0.5);
+    for (int i = 0; i < n; i++)
+        frame_xy(s, hand, right, up);
 }
 
 static void hold(session *s, const gv_frame *hand, float offset, double seconds)
@@ -156,6 +194,12 @@ static void nonsense_config_is_rejected(void)
     c = gv_default_config(); c.gate_max_speed = 0.0f;      CHECK(gv_create(&c) == NULL);
     c = gv_default_config(); c.max_slew = 0.0f;            CHECK(gv_create(&c) == NULL);
     c = gv_default_config(); c.max_slew = NAN;             CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.axis_lock_hands = -0.1f;    CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.axis_dominance = 0.5f;      CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.gain_fast = NAN;            CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.accel_speed_lo = -1.0f;     CHECK(gv_create(&c) == NULL);
+    /* the fast speed must be above the slow one, or the ramp divides by zero */
+    c = gv_default_config(); c.accel_speed_hi = c.accel_speed_lo; CHECK(gv_create(&c) == NULL);
     c = gv_default_config(); c.arm_hold_sec = NAN;         CHECK(gv_create(&c) == NULL);
     c = gv_default_config(); c.arm_hold_sec = -0.1f;       CHECK(gv_create(&c) == NULL);
     c = gv_default_config(); c.release_grace_sec = -1.0f;  CHECK(gv_create(&c) == NULL);
@@ -166,7 +210,7 @@ static void nonsense_config_is_rejected(void)
     c = gv_default_config(); c.filter_beta = -1.0f;        CHECK(gv_create(&c) == NULL);
 
     /* a negative gain is legitimate: it reverses the slider's direction */
-    c = gv_default_config(); c.gain = -c.gain;
+    c = gv_default_config(); c.gain = -c.gain; c.gain_fast = -c.gain_fast;
     gv_ctx *ctx = gv_create(&c);
     CHECK(ctx != NULL);
     gv_destroy(ctx);
@@ -222,8 +266,7 @@ static void sliding_right_raises_the_volume(void)
     arm(&s, &fixture_victory, 0.0f);
     slide(&s, &fixture_victory, 0.0f, 1.5f, 0.6);
     hold(&s, &fixture_victory, 1.5f, 0.5);
-    /* default gain is 1/3 per hand-length: 1.5 hands = +0.50 */
-    CHECK_NEAR(s.out.volume, 0.80f, 0.02);
+    CHECK_NEAR(s.out.volume, AFTER(0.30f, 1.5f), 0.02);
     CHECK(s.changes > 0);
     finish(&s);
 }
@@ -234,7 +277,7 @@ static void sliding_left_lowers_the_volume(void)
     arm(&s, &fixture_victory, 0.0f);
     slide(&s, &fixture_victory, 0.0f, -0.9f, 0.5);
     hold(&s, &fixture_victory, -0.9f, 0.5);
-    CHECK_NEAR(s.out.volume, 0.40f, 0.02);
+    CHECK_NEAR(s.out.volume, BEFORE(0.70f, 0.9f), 0.02);
     finish(&s);
 }
 
@@ -257,17 +300,17 @@ static void a_small_final_step_still_reaches_the_end_of_the_range(void)
 {
     session s = start(0.50f);
     arm(&s, &fixture_victory, 0.0f);
-    /* 1.485 hand-lengths * 1/3 = +0.495: parks the volume just short of 1.0 */
-    slide(&s, &fixture_victory, 0.0f, 1.485f, 0.6);
-    hold(&s, &fixture_victory, 1.485f, 0.6);
+    /* (1.985 - LOCK) hand-lengths * 1/3 = +0.495: parks the volume just short of 1.0 */
+    slide(&s, &fixture_victory, 0.0f, 1.985f, 0.8);
+    hold(&s, &fixture_victory, 1.985f, 0.6);
     CHECK(s.out.volume > 0.98f && s.out.volume < 1.0f);
 
-    slide(&s, &fixture_victory, 1.485f, 1.6f, 0.2); /* target clamps to 1.0 */
-    hold(&s, &fixture_victory, 1.6f, 0.5);
+    slide(&s, &fixture_victory, 1.985f, 2.1f, 0.2); /* target clamps to 1.0 */
+    hold(&s, &fixture_victory, 2.1f, 0.5);
     CHECK(s.out.volume == 1.0f);
 
     int before = s.changes;
-    hold(&s, &fixture_victory, 1.6f, 0.5); /* parked at the end: no repeats */
+    hold(&s, &fixture_victory, 2.1f, 0.5); /* parked at the end: no repeats */
     CHECK(s.changes == before);
     finish(&s);
 }
@@ -281,19 +324,214 @@ static void travel_is_measured_in_hand_lengths_not_pixels(void)
     arm(&s, &far_hand, 0.0f);
     slide(&s, &far_hand, 0.0f, 1.5f, 0.6);
     hold(&s, &far_hand, 1.5f, 0.5);
-    CHECK_NEAR(s.out.volume, 0.80f, 0.02);
+    CHECK_NEAR(s.out.volume, AFTER(0.30f, 1.5f), 0.02);
     finish(&s);
 }
 
-static void movement_inside_the_dead_band_is_not_reported(void)
+/* What the dead-band is for: a hand held "still" wobbles, and that must not
+ * become a stream of volume writes. The band is measured from the last value
+ * reported, which can itself be almost a full band behind the hand, so a
+ * wobble may trip it once; it must not keep tripping it. */
+static void a_wobbling_hand_does_not_chatter(void)
 {
     session s = start(0.50f);
     arm(&s, &fixture_victory, 0.0f);
-    /* 0.015 hand-lengths * 1/3 = 0.005 of volume, under the 0.01 dead-band */
-    slide(&s, &fixture_victory, 0.0f, 0.015f, 0.3);
-    hold(&s, &fixture_victory, 0.015f, 0.5);
+    slide(&s, &fixture_victory, 0.0f, 1.0f, 0.5); /* get the slider going first */
+    hold(&s, &fixture_victory, 1.0f, 1.0);
+    int before = s.changes;
+    CHECK(before > 0);
+
+    /* two seconds of +/-0.012 hand-lengths: +/-0.004 of volume at the pinned
+     * gain, under half the 0.01 band */
+    for (int i = 0; i < 60; i++)
+        frame(&s, &fixture_victory, 1.0f + ((i / 5) % 2 ? 0.012f : -0.012f));
     CHECK(s.out.state == GV_ARMED);
+    CHECK(s.changes - before <= 1);
+    finish(&s);
+}
+
+/* --- which way is the slider -------------------------------------------- */
+
+/* Up and down work as well as left and right. The two are not added together:
+ * measured on real slides, a sideways sweep wanders 0.7 - 1.6 hand-lengths
+ * vertically (the arm swings in an arc), which added in would be 13 - 32% of
+ * unasked-for volume. Instead the first clearly dominant movement picks the
+ * axis, and the slide stays on it until release. */
+
+static void sliding_up_raises_the_volume(void)
+{
+    session s = start(0.30f);
+    arm(&s, &fixture_victory, 0.0f);
+    slide_xy(&s, &fixture_victory, 0.0f, 0.0f, 0.0f, 1.5f, 0.6);
+    hold_xy(&s, &fixture_victory, 0.0f, 1.5f, 0.5);
+    CHECK(s.out.axis == GV_AXIS_Y);
+    CHECK_NEAR(s.out.volume, AFTER(0.30f, 1.5f), 0.02);
+    finish(&s);
+}
+
+static void sliding_down_lowers_the_volume(void)
+{
+    session s = start(0.70f);
+    arm(&s, &fixture_victory, 0.0f);
+    slide_xy(&s, &fixture_victory, 0.0f, 0.0f, 0.0f, -1.1f, 0.5);
+    hold_xy(&s, &fixture_victory, 0.0f, -1.1f, 0.5);
+    CHECK(s.out.axis == GV_AXIS_Y);
+    CHECK_NEAR(s.out.volume, BEFORE(0.70f, 1.1f), 0.02);
+    finish(&s);
+}
+
+static void nothing_moves_until_an_axis_is_chosen(void)
+{
+    session s = start(0.50f);
+    arm(&s, &fixture_victory, 0.0f);
+    slide(&s, &fixture_victory, 0.0f, 0.4f, 0.3); /* under LOCK */
+    hold(&s, &fixture_victory, 0.4f, 0.4);
+    CHECK(s.out.axis == GV_AXIS_NONE);
     CHECK(s.changes == 0);
+
+    /* and then travel counts from the lock point, so there is no jump and a
+     * small adjustment stays possible */
+    slide(&s, &fixture_victory, 0.4f, 0.62f, 0.3);
+    hold(&s, &fixture_victory, 0.62f, 0.5);
+    CHECK(s.out.axis == GV_AXIS_X);
+    CHECK_NEAR(s.out.volume, AFTER(0.50f, 0.62f), 0.015); /* +0.04, not +0.2 */
+    finish(&s);
+}
+
+static void a_sideways_slide_ignores_the_arc_of_the_arm(void)
+{
+    session s = start(0.30f);
+    arm(&s, &fixture_victory, 0.0f);
+    /* right 1.5, rising 0.2 on the way to the lock and 1.0 by the end: once
+     * the slide is sideways, a hand-length of vertical wander changes nothing */
+    slide_xy(&s, &fixture_victory, 0.0f, 0.0f, 0.6f, 0.2f, 0.3);
+    slide_xy(&s, &fixture_victory, 0.6f, 0.2f, 1.5f, 1.0f, 0.4);
+    hold_xy(&s, &fixture_victory, 1.5f, 1.0f, 0.5);
+    CHECK(s.out.axis == GV_AXIS_X);
+    CHECK_NEAR(s.out.volume, AFTER(0.30f, 1.5f), 0.02);
+    finish(&s);
+}
+
+static void an_up_down_slide_ignores_sideways_wander(void)
+{
+    session s = start(0.30f);
+    arm(&s, &fixture_victory, 0.0f);
+    slide_xy(&s, &fixture_victory, 0.0f, 0.0f, 0.2f, 0.6f, 0.3);
+    slide_xy(&s, &fixture_victory, 0.2f, 0.6f, -1.0f, 1.5f, 0.4);
+    hold_xy(&s, &fixture_victory, -1.0f, 1.5f, 0.5);
+    CHECK(s.out.axis == GV_AXIS_Y);
+    CHECK_NEAR(s.out.volume, AFTER(0.30f, 1.5f), 0.02);
+    finish(&s);
+}
+
+/* A diagonal is not a choice. The axis is picked only when one direction is
+ * clearly ahead (twice the other), however far the hand has gone. */
+static void a_diagonal_does_not_pick_an_axis(void)
+{
+    session s = start(0.50f);
+    arm(&s, &fixture_victory, 0.0f);
+    slide_xy(&s, &fixture_victory, 0.0f, 0.0f, 1.2f, 1.0f, 0.5);
+    hold_xy(&s, &fixture_victory, 1.2f, 1.0f, 0.4);
+    CHECK(s.out.axis == GV_AXIS_NONE);
+    CHECK(s.changes == 0);
+    finish(&s);
+}
+
+static void each_slide_picks_its_own_axis(void)
+{
+    session s = start(0.30f);
+    arm(&s, &fixture_victory, 0.0f);
+    slide(&s, &fixture_victory, 0.0f, 1.1f, 0.5);
+    hold(&s, &fixture_victory, 1.1f, 0.4);
+    CHECK(s.out.axis == GV_AXIS_X);
+    float set = s.out.volume;
+
+    hold(&s, &fixture_thumbs_up, 0.0f, 0.4); /* release */
+    CHECK(s.out.state == GV_IDLE);
+    CHECK(s.out.axis == GV_AXIS_NONE);
+
+    gv_set_current_volume(s.ctx, set);
+    arm(&s, &fixture_victory, 1.1f);
+    slide_xy(&s, &fixture_victory, 1.1f, 0.0f, 1.1f, 1.1f, 0.5);
+    hold_xy(&s, &fixture_victory, 1.1f, 1.1f, 0.4);
+    CHECK(s.out.axis == GV_AXIS_Y);
+    CHECK_NEAR(s.out.volume, AFTER(set, 1.1f), 0.02);
+    finish(&s);
+}
+
+/* --- precise when slow, quick when fast --------------------------------- */
+
+/* One fixed gain cannot be both. At 1/3 the first live session was too twitchy
+ * to set a level; at 0.2 the second was too slow to get anywhere. So the gain
+ * depends on how fast the hand is moving, the way a mouse pointer's does. */
+
+static session start_accelerated(float system_volume)
+{
+    gv_config cfg = gv_default_config();
+    cfg.aspect = ASPECT;
+    cfg.axis_lock_hands = LOCK;
+    cfg.gain = 0.1f;          /* at or below 1 hand-length/s */
+    cfg.gain_fast = 0.5f;     /* at or above 5 */
+    cfg.accel_speed_lo = 1.0f;
+    cfg.accel_speed_hi = 5.0f;
+    session s = { 0 };
+    s.aspect = ASPECT;
+    s.ctx = gv_create(&cfg);
+    gv_set_current_volume(s.ctx, system_volume);
+    return s;
+}
+
+static void a_slow_slide_uses_the_fine_gain(void)
+{
+    session s = start_accelerated(0.30f);
+    arm(&s, &fixture_victory, 0.0f);
+    slide(&s, &fixture_victory, 0.0f, 1.5f, 3.0); /* 0.5 hand-lengths/s */
+    hold(&s, &fixture_victory, 1.5f, 1.0);
+    CHECK_NEAR(s.out.volume, 0.30f + 0.1f * (1.5f - LOCK), 0.015);
+    finish(&s);
+}
+
+static void the_same_distance_fast_goes_much_further(void)
+{
+    session s = start_accelerated(0.30f);
+    arm(&s, &fixture_victory, 0.0f);
+    slide(&s, &fixture_victory, 0.0f, 1.5f, 0.2); /* 7.5 hand-lengths/s */
+    hold(&s, &fixture_victory, 1.5f, 1.0);
+    /* not the full 0.5 * 1.0: the hand starts and stops, and the filter
+     * smooths the speed, so part of the travel is at lower gain */
+    CHECK(s.out.volume > 0.30f + 0.30f);
+    CHECK(s.out.volume < 0.30f + 0.5f * (1.5f - LOCK) + 0.02f);
+    finish(&s);
+}
+
+static void gain_rises_smoothly_between_the_two_speeds(void)
+{
+    float gained[3];
+    double seconds[3] = { 1.0, 0.5, 0.3 }; /* 1.5, 3 and 5 hand-lengths/s */
+    for (int i = 0; i < 3; i++) {
+        session s = start_accelerated(0.10f);
+        arm(&s, &fixture_victory, 0.0f);
+        slide(&s, &fixture_victory, 0.0f, 1.5f, seconds[i]);
+        hold(&s, &fixture_victory, 1.5f, 1.0);
+        gained[i] = s.out.volume - 0.10f;
+        finish(&s);
+    }
+    CHECK(gained[0] < gained[1] && gained[1] < gained[2]);
+    CHECK(gained[1] > 1.3f * gained[0]); /* a real difference, not rounding */
+}
+
+/* The price of speed-dependent gain, stated rather than hidden: out fast and
+ * back slow does not return to where it started. It is a relative control,
+ * like a mouse, not a physical slider. */
+static void out_fast_and_back_slow_is_a_net_change(void)
+{
+    session s = start_accelerated(0.30f);
+    arm(&s, &fixture_victory, 0.0f);
+    slide(&s, &fixture_victory, 0.0f, 2.0f, 0.25);
+    hold(&s, &fixture_victory, 2.0f, 0.5);
+    slide(&s, &fixture_victory, 2.0f, LOCK, 4.0);
+    hold(&s, &fixture_victory, LOCK, 0.5);
+    CHECK(s.out.volume > 0.30f + 0.15f);
     finish(&s);
 }
 
@@ -306,7 +544,7 @@ static void dropping_the_pose_releases_and_keeps_the_volume(void)
     slide(&s, &fixture_victory, 0.0f, 0.9f, 0.5);
     hold(&s, &fixture_victory, 0.9f, 0.5);
     float set = s.out.volume;
-    CHECK_NEAR(set, 0.60f, 0.02);
+    CHECK_NEAR(set, AFTER(0.30f, 0.9f), 0.02);
 
     int before = s.changes;
     hold(&s, &fixture_thumbs_up, 0.0f, 0.4);
@@ -410,7 +648,7 @@ static void ring_and_pinky_opening_up_mid_slide_does_not_release(void)
     slide(&s, &open, 0.0f, 0.9f, 0.5);
     hold(&s, &open, 0.9f, 0.5);
     CHECK(s.out.state == GV_ARMED);
-    CHECK_NEAR(s.out.volume, 0.80f, 0.03);
+    CHECK_NEAR(s.out.volume, AFTER(0.50f, 0.9f), 0.03);
     finish(&s);
 }
 
@@ -424,7 +662,7 @@ static void closing_the_hand_releases_and_keeps_the_volume(void)
     slide(&s, tight, 0.0f, 0.9f, 0.5);
     hold(&s, tight, 0.9f, 0.5);
     float set = s.out.volume;
-    CHECK_NEAR(set, 0.60f, 0.02);
+    CHECK_NEAR(set, AFTER(0.30f, 0.9f), 0.02);
 
     int before = s.changes;
     hold(&s, &fist, 0.9f, 0.4);
@@ -513,12 +751,12 @@ static void a_gap_in_tracking_does_not_earn_a_big_jump(void)
     arm(&s, hand, 0.0f);
     hold(&s, NULL, 0.0f, 0.2);
     float before = s.out.volume;
-    frame(&s, hand, 1.5f); /* +0.5 at the pinned gain, if taken in one go */
+    frame(&s, hand, 1.5f); /* +0.33 at the pinned gain, if taken in one go */
     CHECK(s.out.state == GV_ARMED);
     CHECK(s.out.volume - before <= d.max_slew * 0.1f + 1e-4f);
     CHECK(s.out.volume - before > 0.0f); /* followed, just not all at once */
     hold(&s, hand, 1.5f, 0.6);
-    CHECK_NEAR(s.out.volume, 0.70f, 0.03);
+    CHECK_NEAR(s.out.volume, AFTER(0.20f, 1.5f), 0.03);
     finish(&s);
 }
 
@@ -531,12 +769,12 @@ static void a_fast_sweep_is_followed_frame_by_frame(void)
     session s = start_real(0.10f);
     arm(&s, hand, 0.0f);
     int before = s.changes;
-    slide(&s, hand, 0.0f, 3.0f, 0.15); /* 20 hand-lengths per second, five frames */
-    /* 3 hand-lengths at the pinned gain is +1.0. Followed means a change on
-     * nearly every frame of the sweep; rejected-then-caught-up means none
-     * during it and one jump afterwards. */
-    CHECK(s.changes - before >= 4);
-    hold(&s, hand, 3.0f, 0.4);
+    slide(&s, hand, 0.0f, 3.5f, 0.15); /* 23 hand-lengths per second, five frames */
+    /* (3.5 - LOCK) hand-lengths at the pinned gain is +1.0. Followed means a
+     * change on nearly every frame of the sweep once it is under way;
+     * rejected-then-caught-up means none during it and one jump afterwards. */
+    CHECK(s.changes - before >= 3);
+    hold(&s, hand, 3.5f, 0.4);
     CHECK_NEAR(s.out.volume, 1.0f, 1e-6);
     finish(&s);
 }
@@ -598,10 +836,10 @@ static void volume_never_moves_faster_than_the_slew_limit(void)
 
     session s = start_real(0.0f);
     arm(&s, hand, 0.0f);
-    slide(&s, hand, 0.0f, 3.0f, 0.15); /* asks for +1.0 in 0.15 s */
-    hold(&s, hand, 3.0f, 0.2);
+    slide(&s, hand, 0.0f, 3.5f, 0.15); /* asks for +1.0 in 0.15 s */
+    hold(&s, hand, 3.5f, 0.2);
     CHECK(s.out.volume > 0.3f && s.out.volume < 1.0f); /* on its way, not there yet */
-    hold(&s, hand, 3.0f, 0.6);
+    hold(&s, hand, 3.5f, 0.6);
     CHECK_NEAR(s.out.volume, 1.0f, d.dead_band);       /* and it does arrive (the filter
                                                         * closes in from below, inside the dead-band) */
     CHECK(s.max_rate <= d.max_slew * 1.01f);
@@ -619,7 +857,7 @@ static void a_genuinely_fast_move_is_accepted_a_moment_later(void)
     arm(&s, hand, 0.0f);
     hold(&s, hand, 1.5f, 0.6);
     CHECK(s.out.state == GV_ARMED);
-    CHECK_NEAR(s.out.volume, 0.70f, 0.03);
+    CHECK_NEAR(s.out.volume, AFTER(0.20f, 1.5f), 0.03);
     finish(&s);
 }
 
@@ -666,7 +904,7 @@ static void a_frame_with_a_non_finite_timestamp_is_ignored(void)
     slide(&s, &fixture_victory, 0.0f, 0.9f, 0.5);
     hold(&s, &fixture_victory, 0.9f, 0.5);
     CHECK(s.out.state == GV_ARMED);
-    CHECK_NEAR(s.out.volume, 0.80f, 0.02);
+    CHECK_NEAR(s.out.volume, AFTER(0.50f, 0.9f), 0.02);
     finish(&s);
 }
 
@@ -684,7 +922,18 @@ int main(void)
     RUN(volume_is_clamped_to_its_range);
     RUN(a_small_final_step_still_reaches_the_end_of_the_range);
     RUN(travel_is_measured_in_hand_lengths_not_pixels);
-    RUN(movement_inside_the_dead_band_is_not_reported);
+    RUN(a_wobbling_hand_does_not_chatter);
+    RUN(sliding_up_raises_the_volume);
+    RUN(sliding_down_lowers_the_volume);
+    RUN(nothing_moves_until_an_axis_is_chosen);
+    RUN(a_sideways_slide_ignores_the_arc_of_the_arm);
+    RUN(an_up_down_slide_ignores_sideways_wander);
+    RUN(a_diagonal_does_not_pick_an_axis);
+    RUN(each_slide_picks_its_own_axis);
+    RUN(a_slow_slide_uses_the_fine_gain);
+    RUN(the_same_distance_fast_goes_much_further);
+    RUN(gain_rises_smoothly_between_the_two_speeds);
+    RUN(out_fast_and_back_slow_is_a_net_change);
     RUN(dropping_the_pose_releases_and_keeps_the_volume);
     RUN(one_lost_frame_does_not_release);
     RUN(a_stall_longer_than_the_grace_period_releases);

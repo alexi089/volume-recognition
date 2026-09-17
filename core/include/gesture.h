@@ -49,10 +49,19 @@ typedef enum {
     GV_ARMED  = 2
 } gv_state;
 
+/* Which way the current slide runs. Chosen by the first clearly dominant
+ * movement after arming, and kept until release. */
+typedef enum {
+    GV_AXIS_NONE = 0, /* not armed, or armed and not yet moved decisively */
+    GV_AXIS_X    = 1, /* right is louder */
+    GV_AXIS_Y    = 2  /* up is louder */
+} gv_axis;
+
 typedef struct {
     gv_state state;
     float    volume;  /* the volume the system should be at, 0..1 */
     int      changed; /* 1 when `volume` moved enough that the caller should apply it */
+    gv_axis  axis;
 } gv_output;
 
 /* Thresholds for judging one finger; src/pose.h explains the two measurements.
@@ -69,7 +78,17 @@ typedef struct {
     gv_pose_limits pose;
     float arm_hold_sec;      /* arm pose must be held this long to arm */
     float release_grace_sec; /* stay pose may be missing this long before release */
-    float gain;              /* volume change per hand-length of travel */
+    /* Volume change per hand-length of travel. It depends on how fast the hand
+     * is moving, like a mouse pointer: `gain` at or below accel_speed_lo (slow
+     * and precise), `gain_fast` at or above accel_speed_hi, a straight line in
+     * between. Set the two gains equal for a plain fixed gain. Speeds are in
+     * hand-lengths per second. */
+    float gain;
+    float gain_fast;
+    float accel_speed_lo;
+    float accel_speed_hi;
+    float axis_lock_hands;   /* travel along one axis, in hand-lengths, that picks it ... */
+    float axis_dominance;    /* ... provided it is this many times the travel along the other */
     float dead_band;         /* smallest volume change worth reporting */
     float max_slew;          /* fastest the volume may move, per second. A safety
                               * net: whatever the detector does, no jump to full */
@@ -101,8 +120,9 @@ typedef struct gv_ctx gv_ctx;
 
 /* cfg may be NULL for the defaults. Returns NULL if the config is invalid (a
  * non-finite field; a non-positive aspect, pose limit, gate, slew or filter cutoff;
- * a negative time or dead-band; curl limits above the extend limits; or a
- * scale gate that excludes 1.0) or if memory cannot be allocated. */
+ * a negative time, dead-band or axis lock distance; an axis dominance below
+ * 1; accel_speed_hi not above accel_speed_lo; curl limits above the extend limits; or a scale gate that excludes 1.0)
+ * or if memory cannot be allocated. */
 gv_ctx *gv_create(const gv_config *cfg);
 
 /* Safe to call with NULL, like free(). */

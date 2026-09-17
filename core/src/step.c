@@ -2,7 +2,7 @@
 
 gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_volume_ops *ops)
 {
-    gv_step_result r = { { GV_IDLE, 0.0f, 0 }, VOL_OK };
+    gv_step_result r = { { GV_IDLE, 0.0f, 0, GV_AXIS_NONE }, VOL_OK };
 
     /* 1. Tell the core where the system volume is, so arming starts from the
      *    truth even if the volume keys were pressed since the last slide. The

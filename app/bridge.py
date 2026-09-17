@@ -17,6 +17,8 @@ LIB_PATH = Path(__file__).resolve().parents[1] / "core" / "build" / "libgesture.
 NUM_LANDMARKS = 21
 IDLE, ARMING, ARMED = 0, 1, 2
 STATE_NAMES = {IDLE: "idle", ARMING: "arming", ARMED: "armed"}
+AXIS_NONE, AXIS_X, AXIS_Y = 0, 1, 2
+AXIS_NAMES = {AXIS_NONE: None, AXIS_X: "x", AXIS_Y: "y"}
 VOL_OK = 0
 
 
@@ -33,7 +35,7 @@ class Frame(C.Structure):
 
 
 class Output(C.Structure):
-    _fields_ = [("state", C.c_int), ("volume", C.c_float), ("changed", C.c_int)]
+    _fields_ = [("state", C.c_int), ("volume", C.c_float), ("changed", C.c_int), ("axis", C.c_int)]
 
 
 class PoseLimits(C.Structure):
@@ -52,6 +54,11 @@ class Config(C.Structure):
         ("arm_hold_sec", C.c_float),
         ("release_grace_sec", C.c_float),
         ("gain", C.c_float),
+        ("gain_fast", C.c_float),
+        ("accel_speed_lo", C.c_float),
+        ("accel_speed_hi", C.c_float),
+        ("axis_lock_hands", C.c_float),
+        ("axis_dominance", C.c_float),
         ("dead_band", C.c_float),
         ("max_slew", C.c_float),
         ("gate_scale_min", C.c_float),

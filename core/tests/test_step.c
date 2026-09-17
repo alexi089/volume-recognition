@@ -58,7 +58,9 @@ static gv_ctx *start(void)
 {
     gv_config cfg = gv_default_config();
     cfg.aspect = ASPECT;
-    cfg.gain = 1.0f / 3.0f; /* pinned: expected volumes below are arithmetic on it */
+    cfg.gain = 1.0f / 3.0f; /* pinned, and flat: expected volumes below are arithmetic on it */
+    cfg.gain_fast = cfg.gain;
+    cfg.axis_lock_hands = 0.5f; /* likewise: travel counts from 0.5 hand-lengths out */
     now = 0.0;
     return gv_create(&cfg);
 }
@@ -100,7 +102,7 @@ static void sliding_writes_the_target_to_the_backend(void)
     run(ctx, &fixture_victory, 0.0f, 1.5f, 0.6);
     run(ctx, &fixture_victory, 1.5f, 1.5f, 0.5);
     CHECK(fake_set_calls > 0);
-    CHECK_NEAR(fake_volume, 0.80f, 0.02);
+    CHECK_NEAR(fake_volume, 0.30f + (1.5f - 0.5f) / 3.0f, 0.02);
     CHECK_NEAR(fake_last_set, last.out.volume, 1e-6);
     CHECK(last.vol == VOL_OK);
     gv_destroy(ctx);

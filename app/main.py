@@ -95,10 +95,12 @@ class Hud:
         os.set_blocking(self._fd, False)
         self._blocked_since = None
 
-    def send(self, state: int, volume: float, error: str | None) -> None:
+    def send(self, state: int, volume: float, error: str | None, axis: int = bridge.AXIS_NONE) -> None:
         if self._proc is None:
             return
-        line = json.dumps({"state": bridge.STATE_NAMES[state], "volume": round(volume, 4), "error": error}) + "\n"
+        message = {"state": bridge.STATE_NAMES[state], "volume": round(volume, 4), "error": error,
+                   "axis": bridge.AXIS_NAMES[axis]}
+        line = json.dumps(message) + "\n"
         try:
             os.write(self._fd, line.encode())
             self._blocked_since = None
@@ -153,7 +155,7 @@ class Recorder:
         cols = ",".join(f"x{i},y{i},z{i}" for i in range(bridge.NUM_LANDMARKS))
         self._file.write(f"t_sec,present,{cols}\n")
         self._events = open(trace.with_suffix(".events.csv"), "w")
-        self._events.write("t_sec,state,target_volume,changed,vol_status,vol_status_text\n")
+        self._events.write("t_sec,state,axis,target_volume,changed,vol_status,vol_status_text\n")
 
     def write(self, t_sec: float, landmarks, step=None) -> None:
         if self._file is None:
@@ -165,7 +167,8 @@ class Recorder:
         self._file.write(f"{t_sec:.6f},{1 if landmarks else 0},{values}\n")
         if step is not None:
             self._events.write(
-                f"{t_sec:.6f},{bridge.STATE_NAMES[step.out.state]},{step.out.volume:.4f},"
+                f"{t_sec:.6f},{bridge.STATE_NAMES[step.out.state]},{bridge.AXIS_NAMES[step.out.axis] or '-'},"
+                f"{step.out.volume:.4f},"
                 f"{step.out.changed},{step.vol},{bridge.strerror(step.vol)}\n"
             )
 
@@ -176,7 +179,11 @@ class Recorder:
         self._file = self._events = None
 
 
-def draw_overlay(frame, landmarks, state: int, volume: float, error: str | None, fps: float) -> None:
+AXIS_HINTS = {bridge.AXIS_NONE: "move left/right or up/down", bridge.AXIS_X: "left / right", bridge.AXIS_Y: "up / down"}
+
+
+def draw_overlay(frame, landmarks, state: int, volume: float, error: str | None, fps: float,
+                 axis: int = bridge.AXIS_NONE) -> None:
     h, w = frame.shape[:2]
     colour = STATE_COLOURS[state]
     if landmarks:
@@ -186,8 +193,10 @@ def draw_overlay(frame, landmarks, state: int, volume: float, error: str | None,
         for x, y in pts:
             cv2.circle(frame, (x, y), 4, (255, 255, 255), -1)
 
-    cv2.putText(frame, f"{bridge.STATE_NAMES[state].upper()}  {fps:4.1f} fps", (12, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, colour, 2)
+    label = f"{bridge.STATE_NAMES[state].upper()}  {fps:4.1f} fps"
+    if state == bridge.ARMED:
+        label += f"   {AXIS_HINTS[axis]}"
+    cv2.putText(frame, label, (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, colour, 2)
 
     bar_w, bar_h, x0, y0 = w - 24, 14, 12, h - 30
     cv2.rectangle(frame, (x0, y0), (x0 + bar_w, y0 + bar_h), (60, 60, 60), -1)
@@ -231,7 +240,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--camera", type=int, default=0, help="camera index (default 0)")
     parser.add_argument("--record", metavar="CSV", help="also write landmarks to this file")
-    parser.add_argument("--gain", type=float, help="volume per hand-length of travel (default 0.2)")
+    parser.add_argument("--gain", type=float, help="volume per hand-length when moving slowly (default 0.15)")
+    parser.add_argument("--gain-fast", type=float, help="volume per hand-length when moving fast (default 0.6)")
     parser.add_argument("--arm-hold", type=float, metavar="SEC", help="how long the pose must hold to arm (default 0.25)")
     parser.add_argument("--grace", type=float, metavar="SEC", help="how long the pose may be missing before release (default 0.25)")
     parser.add_argument("--no-hud", action="store_true", help="do not launch the native HUD")
@@ -253,7 +263,8 @@ def main() -> None:
         latch = ErrorLatch()
 
         # Tuning flags go straight into the C config; nothing is interpreted here.
-        flags = {"gain": args.gain, "arm_hold_sec": args.arm_hold, "release_grace_sec": args.grace}
+        flags = {"gain": args.gain, "gain_fast": args.gain_fast, "arm_hold_sec": args.arm_hold,
+                 "release_grace_sec": args.grace}
         overrides = {k: v for k, v in flags.items() if v is not None}
 
         with make_landmarker() as landmarker, bridge.Gesture(aspect, **overrides) as gesture:
@@ -280,7 +291,7 @@ def main() -> None:
                 error = latch.update(describe_error(step.vol), now)
 
                 recorder.write(t_sec, landmarks, step)
-                hud.send(step.out.state, step.out.volume, error)
+                hud.send(step.out.state, step.out.volume, error, step.out.axis)
 
                 dt = now - last_frame_t
                 last_frame_t = now
@@ -292,7 +303,7 @@ def main() -> None:
                 if bgr.shape[1] > PREVIEW_WIDTH:
                     scale = PREVIEW_WIDTH / bgr.shape[1]
                     bgr = cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-                draw_overlay(bgr, landmarks, step.out.state, step.out.volume, error, fps)
+                draw_overlay(bgr, landmarks, step.out.state, step.out.volume, error, fps, step.out.axis)
                 cv2.imshow("volume gesture", bgr)
                 if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
                     break
