@@ -34,4 +34,59 @@ typedef struct {
     double   t_sec;   /* capture time in seconds, from a monotonic clock */
 } gv_frame;
 
+/*
+ *   IDLE --pose seen--> ARMING --pose held arm_hold_sec--> ARMED
+ *     ^                    |                                  |
+ *     +---- pose gone for release_grace_sec ------------------+
+ */
+typedef enum {
+    GV_IDLE   = 0,
+    GV_ARMING = 1,
+    GV_ARMED  = 2
+} gv_state;
+
+typedef struct {
+    gv_state state;
+    float    volume;  /* the volume the system should be at, 0..1 */
+    int      changed; /* 1 when `volume` moved enough that the caller should apply it */
+} gv_output;
+
+typedef struct {
+    float aspect;            /* frame width / height */
+    float finger_ratio;      /* finger-extended threshold, see pose.h */
+    float arm_hold_sec;      /* pose must be held this long to arm */
+    float release_grace_sec; /* pose may be missing this long before release */
+    float gain;              /* volume change per hand-length of travel */
+    float dead_band;         /* smallest volume change worth reporting */
+    float filter_min_cutoff; /* One Euro filter parameters, see filter.h */
+    float filter_beta;
+    float filter_d_cutoff;
+} gv_config;
+
+/* The tuned defaults. Start from these and override single fields. */
+gv_config gv_default_config(void);
+
+/*
+ * gv_ctx is an "opaque type": this header declares that the struct exists but
+ * not what is in it, so callers can only hold a pointer and must go through
+ * the functions below. That keeps the state machine's internals private, at
+ * the cost of a heap allocation: gv_create mallocs, gv_destroy frees, and
+ * whoever calls gv_create owns the context until they destroy it.
+ */
+typedef struct gv_ctx gv_ctx;
+
+/* cfg may be NULL for the defaults. Returns NULL if memory cannot be allocated. */
+gv_ctx *gv_create(const gv_config *cfg);
+
+/* Safe to call with NULL, like free(). */
+void gv_destroy(gv_ctx *ctx);
+
+/* Tell the core what the system volume currently is. Call it whenever the
+ * slider is not armed, so that arming starts from the real volume even if it
+ * was changed with the keyboard in the meantime. Ignored while armed. */
+void gv_set_current_volume(gv_ctx *ctx, float volume);
+
+/* Feed one frame; get the state and target volume back. */
+gv_output gv_update(gv_ctx *ctx, const gv_frame *frame);
+
 #endif /* GESTURE_H */

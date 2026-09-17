@@ -10,7 +10,7 @@ BUILD   := build
 # these bugs otherwise pass silently until they corrupt something unrelated.
 SAN     := -fsanitize=address,undefined -fno-omit-frame-pointer
 
-TESTS   := test_filter test_pose
+TESTS   := test_filter test_pose test_gesture
 TEST_BINS := $(addprefix $(BUILD)/,$(TESTS))
 
 .PHONY: all test clean
@@ -28,6 +28,12 @@ $(BUILD)/test_filter: tests/test_filter.c src/filter.c src/filter.h tests/test.h
 
 $(BUILD)/test_pose: tests/test_pose.c tests/fixtures.h src/pose.c src/pose.h include/gesture.h tests/test.h | $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) tests/test_pose.c src/pose.c -lm -o $@
+
+CORE_SRC := src/gesture.c src/pose.c src/filter.c
+CORE_HDR := include/gesture.h src/pose.h src/filter.h
+
+$(BUILD)/test_gesture: tests/test_gesture.c tests/fixtures.h $(CORE_SRC) $(CORE_HDR) tests/test.h | $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) tests/test_gesture.c $(CORE_SRC) -lm -o $@
 
 # Run every test binary; stop at the first one that fails.
 test: $(TEST_BINS)
