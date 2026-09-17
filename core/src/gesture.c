@@ -106,6 +106,8 @@ gv_config gv_default_config(void)
         .gain_fast         = 0.6f,
         .accel_speed_lo    = 1.0f,
         .accel_speed_hi    = 5.0f,
+        .edge_margin       = 0.04f,
+        .edge_rate         = 0.35f,
         .axis_lock_hands   = 0.5f,
         .axis_dominance    = 2.0f,
         .dead_band         = 0.01f,
@@ -139,7 +141,10 @@ static int config_is_valid(const gv_config *c)
                   c->max_slew > 0.0f && isfinite(c->max_slew) &&
                   c->axis_lock_hands >= 0.0f && isfinite(c->axis_lock_hands) &&
                   /* below 1 the "dominant" axis could be the smaller one */
-                  c->axis_dominance >= 1.0f && isfinite(c->axis_dominance);
+                  c->axis_dominance >= 1.0f && isfinite(c->axis_dominance) &&
+                  /* a margin of half the frame or more would make every hand "at the edge" */
+                  c->edge_margin >= 0.0f && c->edge_margin < 0.5f &&
+                  c->edge_rate >= 0.0f && isfinite(c->edge_rate);
 
     return pose_ok && gate_ok &&
            c->aspect > 0.0f && isfinite(c->aspect) &&
@@ -248,6 +253,37 @@ static int choose_axis(gv_ctx *ctx, float right, float up)
         ctx->axis_offset = copysignf(cfg->axis_lock_hands, up);
     }
     return ctx->axis != GV_AXIS_NONE;
+}
+
+/* Is the hand up against the edge of the picture that this slide is heading
+ * for? Returns +1 (keep getting louder), -1 (keep getting quieter) or 0.
+ *
+ * "Heading for" is judged by the travel so far, not by position alone: a hand
+ * that armed beside the left edge and is sliding right is not being pushed
+ * left, and a raised hand's wrist is near the bottom of the picture most of
+ * the time without meaning anything by it.
+ *
+ * Which landmark counts depends on the edge, because the hand is not a point:
+ * sideways it is whichever landmark sticks out furthest; upwards it is the two
+ * raised fingertips, which leave the picture first; downwards it is the wrist. */
+static int edge_push(const gv_config *cfg, const gv_frame *f, gv_axis axis, float travel)
+{
+    const float lo = cfg->edge_margin, hi = 1.0f - cfg->edge_margin;
+
+    if (axis == GV_AXIS_X) {
+        float min_x = f->lm[0].x, max_x = f->lm[0].x;
+        for (int i = 1; i < GV_NUM_LANDMARKS; i++) {
+            if (f->lm[i].x < min_x) min_x = f->lm[i].x;
+            if (f->lm[i].x > max_x) max_x = f->lm[i].x;
+        }
+        if (travel > 0.0f && max_x > hi) return +1;
+        if (travel < 0.0f && min_x < lo) return -1;
+    } else if (axis == GV_AXIS_Y) {
+        float tip = fminf(f->lm[GV_INDEX_TIP].y, f->lm[GV_MIDDLE_TIP].y);
+        if (travel > 0.0f && tip < lo) return +1;                 /* y grows downwards */
+        if (travel < 0.0f && f->lm[GV_WRIST].y > hi) return -1;
+    }
+    return 0;
 }
 
 /* Gain as a function of hand speed (hand-lengths per second): flat at `gain`
@@ -395,15 +431,31 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
              * stays possible. */
             if (ctx->axis != GV_AXIS_NONE) {
                 float travel = (ctx->axis == GV_AXIS_X ? right : up) - ctx->axis_offset;
+
+                /* A 16:9 picture has 1.78x less room top to bottom than side to
+                 * side, so vertical travel counts that much more: the same
+                 * fraction of the picture gives the same change on either axis. */
+                if (ctx->axis == GV_AXIS_Y)
+                    travel *= cfg->aspect;
+
                 float moved = travel - ctx->last_travel;
                 ctx->last_travel = travel;
 
                 double dt = t - since_t;
                 float speed = dt > 0.0 ? fabsf(moved) / (float)dt : 0.0f;
+                float step = gain_at(cfg, speed) * moved;
+
+                /* Held against the edge the slide was heading for: keep going.
+                 * The time credited is capped like the slew limit's, so a run
+                 * of lost frames cannot turn into one big push. */
+                double held = dt > SLEW_MAX_CREDIT_SEC ? SLEW_MAX_CREDIT_SEC : dt;
+                if (held > 0.0)
+                    step += (float)edge_push(cfg, frame, ctx->axis, travel) *
+                            copysignf(cfg->edge_rate, cfg->gain) * (float)held;
 
                 /* Clamped as it accumulates: pushing past an end must not
                  * build up a dead zone to come back through. */
-                ctx->target = clamp01(ctx->target + gain_at(cfg, speed) * moved);
+                ctx->target = clamp01(ctx->target + step);
             }
             float target = ctx->target;
 

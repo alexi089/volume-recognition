@@ -43,6 +43,7 @@ static session start_with_aspect(float system_volume, float aspect)
     cfg.gain = GAIN;
     cfg.gain_fast = GAIN;
     cfg.axis_lock_hands = LOCK;
+    cfg.edge_rate = 0.0f; /* edge push has its own tests; off everywhere else */
     session s = { 0 };
     s.aspect = aspect;
     s.ctx = gv_create(&cfg);
@@ -197,6 +198,9 @@ static void nonsense_config_is_rejected(void)
     c = gv_default_config(); c.axis_lock_hands = -0.1f;    CHECK(gv_create(&c) == NULL);
     c = gv_default_config(); c.axis_dominance = 0.5f;      CHECK(gv_create(&c) == NULL);
     c = gv_default_config(); c.gain_fast = NAN;            CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.edge_margin = 0.5f;         CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.edge_margin = -0.01f;       CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.edge_rate = -0.1f;          CHECK(gv_create(&c) == NULL);
     c = gv_default_config(); c.accel_speed_lo = -1.0f;     CHECK(gv_create(&c) == NULL);
     /* the fast speed must be above the slow one, or the ramp divides by zero */
     c = gv_default_config(); c.accel_speed_hi = c.accel_speed_lo; CHECK(gv_create(&c) == NULL);
@@ -532,6 +536,139 @@ static void out_fast_and_back_slow_is_a_net_change(void)
     slide(&s, &fixture_victory, 2.0f, LOCK, 4.0);
     hold(&s, &fixture_victory, LOCK, 0.5);
     CHECK(s.out.volume > 0.30f + 0.15f);
+    finish(&s);
+}
+
+/* --- running out of frame ----------------------------------------------- */
+
+/* A webcam frame is small: measured live, 8.1 hand-lengths wide and 4.6 tall,
+ * and the hand itself is two tall. A slide therefore hits the edge of the
+ * picture long before the volume hits the end of its range, and once the
+ * fingers leave the picture tracking is gone. So reaching the edge in the
+ * slide's own direction and holding there keeps the volume moving, the way
+ * dragging against the edge of a window keeps it scrolling. */
+
+#define EDGE_RATE 0.3f
+#define EDGE_GAIN 0.1f /* low, so a slide to the edge leaves room to see the push */
+
+static session start_with_edge_push(float system_volume)
+{
+    gv_config cfg = gv_default_config();
+    cfg.aspect = ASPECT;
+    cfg.gain = EDGE_GAIN;
+    cfg.gain_fast = EDGE_GAIN;
+    cfg.axis_lock_hands = LOCK;
+    cfg.edge_margin = 0.04f;
+    cfg.edge_rate = EDGE_RATE;
+    session s = { 0 };
+    s.aspect = ASPECT;
+    s.ctx = gv_create(&cfg);
+    gv_set_current_volume(s.ctx, system_volume);
+    return s;
+}
+
+/* The victory photo's hand reaches each edge of the picture after sliding
+ * 3.56 hand-lengths right, 1.03 left, 2.24 up (fingertips) or 1.39 down
+ * (wrist); each test goes a little past that. */
+
+static void holding_at_the_right_edge_keeps_raising_the_volume(void)
+{
+    session s = start_with_edge_push(0.0f);
+    arm(&s, &fixture_victory, 0.0f);
+    slide(&s, &fixture_victory, 0.0f, 2.0f, 0.8);
+    hold(&s, &fixture_victory, 2.0f, 0.6); /* mid-picture: travel only, nothing extra */
+    CHECK_NEAR(s.out.volume, EDGE_GAIN * (2.0f - LOCK), 0.015);
+
+    slide(&s, &fixture_victory, 2.0f, 3.7f, 0.6);
+    float arrived = s.out.volume;
+    hold(&s, &fixture_victory, 3.7f, 1.0);
+    CHECK(s.out.volume > arrived + 0.8f * EDGE_RATE);
+    CHECK(s.out.volume < EDGE_GAIN * (3.7f - LOCK) + 1.2f * EDGE_RATE);
+
+    hold(&s, &fixture_victory, 3.7f, 3.0);
+    CHECK_NEAR(s.out.volume, 1.0f, 1e-6); /* and held there, it gets all the way */
+    finish(&s);
+}
+
+static void holding_at_the_left_edge_keeps_lowering_it(void)
+{
+    session s = start_with_edge_push(1.0f);
+    arm(&s, &fixture_victory, 0.0f);
+    slide(&s, &fixture_victory, 0.0f, -1.2f, 0.5);
+    float arrived = s.out.volume;
+    hold(&s, &fixture_victory, -1.2f, 1.0);
+    CHECK(s.out.volume < arrived - 0.8f * EDGE_RATE);
+    finish(&s);
+}
+
+static void the_top_edge_pushes_up_and_the_bottom_edge_down(void)
+{
+    session up = start_with_edge_push(0.20f);
+    arm(&up, &fixture_victory, 0.0f);
+    slide_xy(&up, &fixture_victory, 0.0f, 0.0f, 0.0f, 2.4f, 0.8); /* fingertips at the top */
+    float arrived = up.out.volume;
+    hold_xy(&up, &fixture_victory, 0.0f, 2.4f, 1.0);
+    CHECK(up.out.axis == GV_AXIS_Y);
+    CHECK(up.out.volume > arrived + 0.8f * EDGE_RATE);
+    finish(&up);
+
+    session down = start_with_edge_push(0.90f);
+    arm(&down, &fixture_victory, 0.0f);
+    slide_xy(&down, &fixture_victory, 0.0f, 0.0f, 0.0f, -1.5f, 0.6); /* wrist at the bottom */
+    arrived = down.out.volume;
+    hold_xy(&down, &fixture_victory, 0.0f, -1.5f, 1.0);
+    CHECK(down.out.volume < arrived - 0.8f * EDGE_RATE);
+    finish(&down);
+}
+
+/* Only the edge the slide is heading for counts. The case that matters: a
+ * raised hand very often has its wrist at or below the bottom of the picture
+ * (the landmark model extrapolates it). Sliding UP from there, the wrist is
+ * still "at the bottom edge" for a while, and that must not drag the volume
+ * down against the slide. Nor does an edge matter to a slide on the other
+ * axis, or before an axis is chosen. */
+static void an_edge_the_slide_is_not_heading_for_does_nothing(void)
+{
+    session s = start_with_edge_push(0.30f);
+    arm(&s, &fixture_victory, 0.0f);
+    /* re-arm low: wrist 0.34 below the bottom of the picture */
+    hold(&s, &fixture_thumbs_up, 0.0f, 0.4);
+    gv_set_current_volume(s.ctx, 0.30f);
+    hold_xy(&s, &fixture_victory, 0.0f, -2.2f, 0.5);
+    CHECK(s.out.state == GV_ARMED);
+
+    slide_xy(&s, &fixture_victory, 0.0f, -2.2f, 0.0f, -1.5f, 0.4); /* up 0.7: wrist still past the edge */
+    hold_xy(&s, &fixture_victory, 0.0f, -1.5f, 1.0);
+    CHECK(s.out.axis == GV_AXIS_Y);
+    CHECK_NEAR(s.out.volume, 0.30f + EDGE_GAIN * (0.7f - LOCK), 0.015); /* up a little, not pushed down */
+    finish(&s);
+
+    session low = start_with_edge_push(0.30f);
+    arm(&low, &fixture_victory, 0.0f);
+    /* a slide to the LEFT (quieter) that sinks until the wrist is at the bottom
+     * edge: the bottom edge also means "quieter", but only to an up/down slide */
+    slide_xy(&low, &fixture_victory, 0.0f, 0.0f, -0.9f, -0.3f, 0.6);
+    slide_xy(&low, &fixture_victory, -0.9f, -0.3f, -0.9f, -1.5f, 0.4);
+    hold_xy(&low, &fixture_victory, -0.9f, -1.5f, 0.4);
+    CHECK(low.out.axis == GV_AXIS_X);
+    float before = low.out.volume;
+    hold_xy(&low, &fixture_victory, -0.9f, -1.5f, 1.0);
+    CHECK_NEAR(low.out.volume, before, 0.011);
+    finish(&low);
+}
+
+/* On a 16:9 picture there is 1.78x less room vertically than horizontally, so
+ * vertical travel counts 1.78x as much: the same fraction of the picture gives
+ * the same change on either axis. */
+static void vertical_travel_is_scaled_by_the_aspect_ratio(void)
+{
+    const gv_frame *hand = &fixture_real_tight_two;
+    session s = start_real(0.20f);
+    arm(&s, hand, 0.0f);
+    slide_xy(&s, hand, 0.0f, 0.0f, 0.0f, 1.1f, 0.5);
+    hold_xy(&s, hand, 0.0f, 1.1f, 0.6);
+    CHECK(s.out.axis == GV_AXIS_Y);
+    CHECK_NEAR(s.out.volume, 0.20f + GAIN * REAL * (1.1f - LOCK), 0.03);
     finish(&s);
 }
 
@@ -934,6 +1071,11 @@ int main(void)
     RUN(the_same_distance_fast_goes_much_further);
     RUN(gain_rises_smoothly_between_the_two_speeds);
     RUN(out_fast_and_back_slow_is_a_net_change);
+    RUN(holding_at_the_right_edge_keeps_raising_the_volume);
+    RUN(holding_at_the_left_edge_keeps_lowering_it);
+    RUN(the_top_edge_pushes_up_and_the_bottom_edge_down);
+    RUN(an_edge_the_slide_is_not_heading_for_does_nothing);
+    RUN(vertical_travel_is_scaled_by_the_aspect_ratio);
     RUN(dropping_the_pose_releases_and_keeps_the_volume);
     RUN(one_lost_frame_does_not_release);
     RUN(a_stall_longer_than_the_grace_period_releases);

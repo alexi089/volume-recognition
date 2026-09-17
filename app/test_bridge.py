@@ -60,7 +60,7 @@ def main() -> int:
     # A real hand, held still, arms; sliding it right raises the volume.
     # gain and lock distance pinned: the expected volumes below are arithmetic on
     # them, not on the tuned defaults. A slide of h hand-lengths is worth gain * (h - lock).
-    pinned = {"gain": 1 / 3, "gain_fast": 1 / 3, "axis_lock_hands": 0.5}  # flat gain: speed makes no difference
+    pinned = {"gain": 1 / 3, "gain_fast": 1 / 3, "axis_lock_hands": 0.5, "edge_rate": 0.0}  # flat gain, no edge push
     with bridge.Gesture(aspect=aspect, **pinned) as g:
         g.set_current_volume(0.30)
         out, t = run(g, victory, [0.0] * 15, 0.0)

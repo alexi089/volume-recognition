@@ -60,6 +60,7 @@ static gv_ctx *start(void)
     cfg.aspect = ASPECT;
     cfg.gain = 1.0f / 3.0f; /* pinned, and flat: expected volumes below are arithmetic on it */
     cfg.gain_fast = cfg.gain;
+    cfg.edge_rate = 0.0f;
     cfg.axis_lock_hands = 0.5f; /* likewise: travel counts from 0.5 hand-lengths out */
     now = 0.0;
     return gv_create(&cfg);

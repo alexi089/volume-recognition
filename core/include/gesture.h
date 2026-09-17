@@ -87,6 +87,12 @@ typedef struct {
     float gain_fast;
     float accel_speed_lo;
     float accel_speed_hi;
+    /* Running out of picture: when part of the hand is within edge_margin (a
+     * fraction of the frame) of the edge the slide is heading for, the volume
+     * keeps moving that way at edge_rate per second. 0 turns it off. */
+    float edge_margin;
+    float edge_rate;
+
     float axis_lock_hands;   /* travel along one axis, in hand-lengths, that picks it ... */
     float axis_dominance;    /* ... provided it is this many times the travel along the other */
     float dead_band;         /* smallest volume change worth reporting */
@@ -121,7 +127,8 @@ typedef struct gv_ctx gv_ctx;
 /* cfg may be NULL for the defaults. Returns NULL if the config is invalid (a
  * non-finite field; a non-positive aspect, pose limit, gate, slew or filter cutoff;
  * a negative time, dead-band or axis lock distance; an axis dominance below
- * 1; accel_speed_hi not above accel_speed_lo; curl limits above the extend limits; or a scale gate that excludes 1.0)
+ * 1; accel_speed_hi not above accel_speed_lo; an edge margin outside
+ * [0, 0.5) or a negative edge rate; curl limits above the extend limits; or a scale gate that excludes 1.0)
  * or if memory cannot be allocated. */
 gv_ctx *gv_create(const gv_config *cfg);
 

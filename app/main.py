@@ -217,10 +217,18 @@ def draw_overlay(frame, landmarks, state: int, volume: float, error: str | None,
         label += f"   {AXIS_HINTS[axis]}"
     cv2.putText(frame, label, (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, colour, 2)
 
-    bar_w, bar_h, x0, y0 = w - 24, 14, 12, h - 30
-    cv2.rectangle(frame, (x0, y0), (x0 + bar_w, y0 + bar_h), (60, 60, 60), -1)
-    cv2.rectangle(frame, (x0, y0), (x0 + int(bar_w * volume), y0 + bar_h), colour, -1)
-    cv2.putText(frame, f"{round(volume * 100)}%", (x0, y0 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    # The bar is blended over the camera picture rather than painted on it, so
+    # the hand stays visible behind it. (The real glass is the native HUD; this
+    # is the debug view.)
+    bar_w, bar_h, x0, y0 = w - 24, 10, 12, h - 26
+    glass = frame.copy()
+    cv2.rectangle(glass, (x0, y0), (x0 + bar_w, y0 + bar_h), (255, 255, 255), -1)
+    cv2.addWeighted(glass, 0.18, frame, 0.82, 0, dst=frame)
+    glass = frame.copy()
+    cv2.rectangle(glass, (x0, y0), (x0 + int(bar_w * volume), y0 + bar_h), colour, -1)
+    cv2.addWeighted(glass, 0.65, frame, 0.35, 0, dst=frame)
+    cv2.putText(frame, f"{round(volume * 100)}%", (x0, y0 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1,
+                cv2.LINE_AA)
 
     if error:
         # A failed volume write means the whole app is doing nothing useful, so

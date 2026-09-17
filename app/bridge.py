@@ -57,6 +57,8 @@ class Config(C.Structure):
         ("gain_fast", C.c_float),
         ("accel_speed_lo", C.c_float),
         ("accel_speed_hi", C.c_float),
+        ("edge_margin", C.c_float),
+        ("edge_rate", C.c_float),
         ("axis_lock_hands", C.c_float),
         ("axis_dominance", C.c_float),
         ("dead_band", C.c_float),
