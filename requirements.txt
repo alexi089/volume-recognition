@@ -1,4 +1,13 @@
 # Python 3.12 (see Makefile `setup`). mediapipe pulls in numpy and
 # opencv-contrib-python; do NOT also install opencv-python, the two packages
 # both ship the `cv2` module and overwrite each other.
-mediapipe==1.0.1
+#
+# Pinned to 0.10.35 on purpose. On macOS, MediaPipe's GPU (Metal) delegate keeps
+# about one IOSurface-backed pixel buffer per frame for as long as the landmarker
+# is open, in 0.10.35 and 1.0.1 alike; the app crashed after eight minutes when
+# CVPixelBufferCreate finally failed. The CPU delegate has no such problem, but
+# in 1.0.1 it aborts at start-up ("DrishtiMetalHelper ... Service is
+# unavailable"), which is what forced the GPU delegate in the first place. In
+# 0.10.35 the CPU delegate works: 4.5 ms a frame, flat memory. Before moving
+# this pin, run app/test_leak.py against the new version.
+mediapipe==0.10.35

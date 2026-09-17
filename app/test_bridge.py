@@ -8,12 +8,11 @@ import sys
 from pathlib import Path
 
 import cv2
-import mediapipe as mp
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 import bridge  # noqa: E402
-from main import make_landmarker  # noqa: E402
+from main import detect_photo, make_landmarker  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 DT = 1.0 / 30.0
@@ -30,10 +29,9 @@ def check(cond: bool, label: str) -> None:
 
 def landmarks_from_photo(landmarker, name: str):
     bgr = cv2.imread(str(ROOT / "traces" / "fixtures" / f"{name}.jpg"))
-    rgba = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGBA)
-    result = landmarker.detect(mp.Image(image_format=mp.ImageFormat.SRGBA, data=rgba))
-    assert result.hand_landmarks, f"no hand found in {name}.jpg"
-    return result.hand_landmarks[0], bgr.shape[1] / bgr.shape[0]
+    hand = detect_photo(landmarker, bgr)
+    assert hand, f"no hand found in {name}.jpg"
+    return hand, bgr.shape[1] / bgr.shape[0]
 
 
 class Shifted:

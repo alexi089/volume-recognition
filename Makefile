@@ -25,11 +25,12 @@ $(MODEL):
 core:
 	$(MAKE) -C core all
 
-# C unit tests (under ASan + UBSan), then the Python <-> C end-to-end test.
-# Neither touches the camera or the real system volume.
+# C unit tests (under ASan + UBSan), the Python <-> C end-to-end test, and the
+# memory-growth test. None of them touches the camera or the real system volume.
 test: setup core
 	$(MAKE) -C core test
 	$(PY) app/test_bridge.py
+	$(PY) app/test_leak.py
 
 # Extra arguments: make run ARGS="--record traces/slide_up.csv"
 run: setup core

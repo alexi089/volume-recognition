@@ -38,9 +38,11 @@ def make_landmarker(image_mode: bool = False) -> vision.HandLandmarker:
     options = vision.HandLandmarkerOptions(
         base_options=BaseOptions(
             model_asset_path=str(MODEL_PATH),
-            # The CPU delegate aborts inside MediaPipe 1.0.1 on macOS
-            # ("DrishtiMetalHelper ... Service is unavailable"). Metal works.
-            delegate=BaseOptions.Delegate.GPU,
+            # CPU, not GPU: on macOS the Metal delegate keeps a pixel buffer per
+            # frame until the landmarker closes, and the process dies after a
+            # few minutes. The CPU delegate costs 4.5 ms a frame and stays flat.
+            # requirements.txt has the full story; app/test_leak.py guards it.
+            delegate=BaseOptions.Delegate.CPU,
         ),
         running_mode=vision.RunningMode.IMAGE if image_mode else vision.RunningMode.VIDEO,
         num_hands=1,
@@ -50,6 +52,21 @@ def make_landmarker(image_mode: bool = False) -> vision.HandLandmarker:
 
 CAPTURE_SIZE = (1280, 720)
 PREVIEW_WIDTH = 960
+
+
+def detect(landmarker: vision.HandLandmarker, bgr, ts_ms: int):
+    """One frame through MediaPipe; returns the 21 landmarks of the first hand, or None.
+    The one place a frame is handed to MediaPipe, shared by the camera loop and the leak test."""
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    result = landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ts_ms)
+    return result.hand_landmarks[0] if result.hand_landmarks else None
+
+
+def detect_photo(landmarker: vision.HandLandmarker, bgr):
+    """As detect(), for a landmarker made with image_mode=True (tests and fixture tools)."""
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    result = landmarker.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+    return result.hand_landmarks[0] if result.hand_landmarks else None
 
 
 def open_camera(index: int) -> cv2.VideoCapture:
@@ -281,10 +298,7 @@ def main() -> None:
                 ts_ms = max(int((now - start) * 1000), last_ts_ms + 1)
                 last_ts_ms = ts_ms
 
-                # The Metal delegate only accepts 4-channel images.
-                rgba = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGBA)
-                result = landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGBA, data=rgba), ts_ms)
-                landmarks = result.hand_landmarks[0] if result.hand_landmarks else None
+                landmarks = detect(landmarker, bgr, ts_ms)
 
                 t_sec = now - start
                 step = gesture.step(landmarks, t_sec)

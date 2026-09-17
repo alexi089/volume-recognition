@@ -13,12 +13,11 @@ import sys
 from pathlib import Path
 
 import cv2
-import mediapipe as mp
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "app"))
 
-from main import Recorder, make_landmarker  # noqa: E402
+from main import Recorder, detect_photo, make_landmarker  # noqa: E402
 
 DT = 1.0 / 30.0
 
@@ -50,9 +49,7 @@ def main() -> None:
     with make_landmarker(image_mode=True) as landmarker:
         for name in ("victory", "thumbs_up", "pointing_up"):
             bgr = cv2.imread(str(ROOT / "traces" / "fixtures" / f"{name}.jpg"))
-            rgba = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGBA)
-            result = landmarker.detect(mp.Image(image_format=mp.ImageFormat.SRGBA, data=rgba))
-            hands[name] = result.hand_landmarks[0]
+            hands[name] = detect_photo(landmarker, bgr)
     v, fist, point = hands["victory"], hands["thumbs_up"], hands["pointing_up"]
     still = [0.0] * 15
 

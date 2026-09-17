@@ -194,6 +194,39 @@ the key decision out of the C this project exists to teach, and "Victory" is a
 spread V rather than two fingers up. It is the fallback if scripted recordings
 cannot reach clean positives with zero negative triggers.
 
+## The crash in the second live session (2026-09-17)
+
+After 476 s (11,330 frames) the app aborted inside MediaPipe:
+`CVPixelBufferCreate` returned -6662 (`kCVReturnAllocationFailed`) in
+`ConvertFromImageFrame`, reached from `ImageCloneCalculator`. Investigation:
+
+- Reproduced headlessly with synthetic 1080p frames: IOSurface regions grew by
+  about two per frame (4,068 after 2,000 frames; footprint 469 MB -> 31 GB ->
+  62 GB). At 720p with a hand in view, about one per frame.
+- `mp.Image` frees itself in `__del__`, so the references are not ours.
+- Running mode makes no difference: VIDEO, IMAGE and LIVE_STREAM all retain the
+  same number.
+- The surfaces are released the moment the landmarker closes (1,021 regions ->
+  21, three cycles running). So it is an unbounded cache inside the graph, not
+  memory lost for good.
+- MediaPipe 0.10.35's GPU delegate does exactly the same (5.8 GB after 1,500
+  frames). The leak belongs to the macOS GPU path, not to 1.0.1.
+- 0.10.35's CPU delegate works here: 4.5 ms a frame against 2.8 on the GPU,
+  footprint flat at 118 MB, no IOSurfaces, hand found in 1,500 of 1,500 frames
+  (GPU: 1,477). 1.0.1's CPU delegate aborts at start-up, which is what had
+  forced the GPU delegate on day one.
+
+Fix: pin `mediapipe==0.10.35`, CPU delegate, plain RGB frames; every MediaPipe
+call goes through `detect()` / `detect_photo()` in `app/main.py`.
+`app/test_leak.py` runs that path for 400 frames and fails if the footprint
+grows by more than 100 MB (it grew 1,417 MB before the fix and 0 - 1 MB after);
+a 15,000-frame soak held 115 - 118 MB. Recycling the landmarker periodically
+was considered and rejected: it would reset hand tracking mid-slide.
+
+The crash went unnoticed for several minutes because the launch command ended
+in `| grep ...; echo`, so the task reported exit code 0. Launch commands now use
+`set -o pipefail`.
+
 ## Changes from the plan
 
 - `vol_*` lives in its own `volume.h` rather than in `gesture.h`, keeping the

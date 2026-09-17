@@ -17,7 +17,7 @@ recording; **the reworked version has not yet been tried live.**
 | C core (filter, pose, state machine, glue, trace parser) | 229 checks across 5 suites, under ASan + UBSan; pose tests mutation-checked |
 | Photo -> MediaPipe -> ctypes -> C state machine | tested (`app/test_bridge.py`) |
 | C -> CoreAudio -> real system volume | works on built-in speakers, and on AirPods in some states; see Known limits |
-| Live camera loop (`make run`) | runs: 28.7 fps with the preview (no hand in view) |
+| Live camera loop (`make run`) | two live sessions. The second crashed after 8 minutes (MediaPipe GPU buffer leak); fixed by moving to the CPU delegate, soak-tested for 15,000 frames with a flat 116 MB footprint. Frame rate with the preview was 28.7 fps on the GPU delegate; **not re-measured live on CPU** |
 | Dropping out mid-slide | on the recording: 69 -> 32 armed sessions, median 0.9 -> 2.4 s, under one second 40 -> 9. Proxy numbers: the recording has no intent labels |
 | Tuning constants | reasoned from one recording of one hand; **not yet tuned on scripted recordings** |
 | Real negative traces (typing, nose scratch, ...) | **none yet**; the four pass/fail traces in `traces/` are synthetic |
@@ -31,7 +31,7 @@ macOS on Apple Silicon, Command Line Tools (`clang`, `make`, `swiftc`), and
 
 ```sh
 make setup      # venv, mediapipe, and the 7.8 MB hand-landmark model
-make test       # C suites, trace replays, Python <-> C test. No camera, volume untouched
+make test       # C suites, trace replays, Python <-> C test, memory-growth test. No camera, volume untouched
 make run        # camera preview + gesture control (+ HUD if built: make -C hud)
 ```
 
@@ -183,8 +183,15 @@ live session: no intent labels, so it is a tuning corpus (`stats` only).
   is no software workaround; the app shows a red banner.
 - RGB webcam: degrades in dim light. BMW's system uses an infrared depth camera.
 - One hand, the first MediaPipe finds.
-- MediaPipe 1.0.1's CPU delegate aborts on macOS; the app uses the Metal (GPU)
-  delegate, which requires 4-channel RGBA frames.
+- MediaPipe is pinned to 0.10.35 and runs on the CPU delegate (4.5 ms a frame).
+  On macOS the GPU (Metal) delegate keeps about one pixel buffer per frame until
+  the landmarker closes, in 0.10.35 and 1.0.1 alike; the second live session
+  crashed after eight minutes because of it. 1.0.1's CPU delegate aborts at
+  start-up, hence the pin. `app/test_leak.py` guards this; run it before moving
+  the pin.
+- MediaPipe 0.10.35 contains a Google usage-telemetry uploader ("clearcut"); it
+  logs a failed upload attempt at exit. Whether it can be disabled has not been
+  looked into.
 - The read-back check on volume writes is best-effort; its blind spots are
   listed in `core/include/volume.h`.
 - macOS only. The C core is portable; `volume_macos.c` and the HUD are not.
