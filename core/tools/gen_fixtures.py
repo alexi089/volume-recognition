@@ -1,8 +1,12 @@
-"""Regenerates core/tests/fixtures.h from the photos in traces/fixtures/.
+"""Regenerates core/tests/fixtures.h.
 
-Runs MediaPipe once per photo and writes the 21 landmarks out as C struct
-initialisers, so the C pose tests run against real model output rather than
-hand-drawn coordinates. Run from the repo root:
+Two sources, both real model output rather than hand-drawn coordinates:
+  - the photos in traces/fixtures/, run through MediaPipe here;
+  - single frames lifted from traces/real_first_session.csv, the first live
+    recording. The photos are posed (tight fists, fingers ramrod straight); the
+    recording is what a relaxed hand in front of a webcam actually looks like,
+    and it is where the first pose rule fell apart.
+Run from the repo root:
 
     .venv/bin/python core/tools/gen_fixtures.py
 """
@@ -15,6 +19,14 @@ from mediapipe.tasks.python import BaseOptions, vision
 
 ROOT = Path(__file__).resolve().parents[2]
 PHOTOS = ["victory", "pointing_up", "thumbs_up"]
+
+# name -> 1-based line number in the recording. Chosen by measurement:
+#   relaxed_two  index/middle up, ring/pinky loosely curled (wrist ratio 1.12 /
+#                1.09: the old 1.15 threshold flickered on exactly this)
+#   tight_two    the same pose with ring/pinky properly tucked
+#   fist, open_palm  the two ways out of the pose
+REAL_TRACE = ROOT / "traces" / "real_first_session.csv"
+REAL_FRAMES = {"relaxed_two": 410, "tight_two": 162, "fist": 511, "open_palm": 254}
 OUT = ROOT / "core" / "tests" / "fixtures.h"
 
 
@@ -57,6 +69,26 @@ def main() -> None:
             lines.append("    .t_sec = 0.0,")
             lines.append("};")
             lines.append("")
+    trace_lines = REAL_TRACE.read_text().splitlines()
+    aspect = float(trace_lines[0].split("=")[1])
+    lines.append(f"/* frames from {REAL_TRACE.name}, a {aspect:.3f}:1 camera */")
+    lines.append(f"#define FIXTURE_REAL_ASPECT {aspect:.6f}f")
+    lines.append("")
+    for name, line_no in REAL_FRAMES.items():
+        fields = [float(v) for v in trace_lines[line_no - 1].split(",")]
+        if len(fields) != 65 or fields[1] != 1.0:
+            raise SystemExit(f"{REAL_TRACE.name}:{line_no} is not a hand frame")
+        lines.append(f"/* {REAL_TRACE.name} line {line_no}, t = {fields[0]:.1f} s */")
+        lines.append(f"static const gv_frame fixture_real_{name} = {{")
+        lines.append("    .lm = {")
+        for i in range(21):
+            x, y, z = fields[2 + 3 * i : 5 + 3 * i]
+            lines.append(f"        {{ {x:.6f}f, {y:.6f}f, {z:.6f}f }},")
+        lines.append("    },")
+        lines.append("    .present = 1,")
+        lines.append("    .t_sec = 0.0,")
+        lines.append("};")
+        lines.append("")
     lines.append("#endif /* FIXTURES_H */")
     OUT.write_text("\n".join(lines) + "\n")
     print(f"wrote {OUT.relative_to(ROOT)}")

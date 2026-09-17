@@ -35,9 +35,13 @@ typedef struct {
 } gv_frame;
 
 /*
- *   IDLE --pose seen--> ARMING --pose held arm_hold_sec--> ARMED
- *     ^                    |                                  |
- *     +---- pose gone for release_grace_sec ------------------+
+ *   IDLE --arm pose seen--> ARMING --arm pose held arm_hold_sec--> ARMED
+ *     ^                        |                                     |
+ *     +-- arm pose gone -------+        stay pose gone, or frames ---+
+ *         for release_grace_sec         implausible, for release_grace_sec
+ *
+ * The arm pose is strict (two fingers up, the other two not); the stay pose is
+ * lenient (index and middle not curled). See src/pose.h.
  */
 typedef enum {
     GV_IDLE   = 0,
@@ -51,13 +55,33 @@ typedef struct {
     int      changed; /* 1 when `volume` moved enough that the caller should apply it */
 } gv_output;
 
+/* Thresholds for judging one finger; src/pose.h explains the two measurements.
+ * The gap between the extend and curl values is the ambiguous band. */
+typedef struct {
+    float extend_reach;    /* extended needs reach above this ...            */
+    float extend_straight; /* ... AND straightness above this                */
+    float curl_reach;      /* curled needs reach below this ...              */
+    float curl_straight;   /* ... OR straightness below this                 */
+} gv_pose_limits;
+
 typedef struct {
     float aspect;            /* frame width / height */
-    float finger_ratio;      /* finger-extended threshold, see pose.h */
-    float arm_hold_sec;      /* pose must be held this long to arm */
-    float release_grace_sec; /* pose may be missing this long before release */
+    gv_pose_limits pose;
+    float arm_hold_sec;      /* arm pose must be held this long to arm */
+    float release_grace_sec; /* stay pose may be missing this long before release */
     float gain;              /* volume change per hand-length of travel */
     float dead_band;         /* smallest volume change worth reporting */
+    float max_slew;          /* fastest the volume may move, per second. A safety
+                              * net: whatever the detector does, no jump to full */
+
+    /* While armed, a frame is believed only if the hand it shows could be the
+     * same hand as a moment ago. Landmark models now and then emit a frame
+     * where the hand collapses to a dot or jumps across the image; one such
+     * frame moved the volume by 0.57 in the first live session. */
+    float gate_scale_min;    /* hand size, relative to the last believed frame, */
+    float gate_scale_max;    /* must stay within [min, max]                     */
+    float gate_max_speed;    /* palm speed limit, hand-lengths per second      */
+
     float filter_min_cutoff; /* One Euro filter parameters, see filter.h */
     float filter_beta;
     float filter_d_cutoff;
@@ -76,8 +100,9 @@ gv_config gv_default_config(void);
 typedef struct gv_ctx gv_ctx;
 
 /* cfg may be NULL for the defaults. Returns NULL if the config is invalid (a
- * non-finite field, or a non-positive aspect, finger_ratio or filter cutoff,
- * or a negative time or dead-band) or if memory cannot be allocated. */
+ * non-finite field; a non-positive aspect, pose limit, gate, slew or filter cutoff;
+ * a negative time or dead-band; curl limits above the extend limits; or a
+ * scale gate that excludes 1.0) or if memory cannot be allocated. */
 gv_ctx *gv_create(const gv_config *cfg);
 
 /* Safe to call with NULL, like free(). */

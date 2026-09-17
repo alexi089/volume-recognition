@@ -219,6 +219,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--camera", type=int, default=0, help="camera index (default 0)")
     parser.add_argument("--record", metavar="CSV", help="also write landmarks to this file")
+    parser.add_argument("--gain", type=float, help="volume per hand-length of travel (default 0.2)")
+    parser.add_argument("--arm-hold", type=float, metavar="SEC", help="how long the pose must hold to arm (default 0.25)")
+    parser.add_argument("--grace", type=float, metavar="SEC", help="how long the pose may be missing before release (default 0.25)")
     parser.add_argument("--no-hud", action="store_true", help="do not launch the native HUD")
     parser.add_argument("--no-preview", action="store_true", help="do not show the camera preview window (quit with Ctrl-C)")
     args = parser.parse_args()
@@ -237,7 +240,11 @@ def main() -> None:
         last_ts_ms, fps, last_frame_t = -1, 0.0, start
         latch = ErrorLatch()
 
-        with make_landmarker() as landmarker, bridge.Gesture(aspect) as gesture:
+        # Tuning flags go straight into the C config; nothing is interpreted here.
+        flags = {"gain": args.gain, "arm_hold_sec": args.arm_hold, "release_grace_sec": args.grace}
+        overrides = {k: v for k, v in flags.items() if v is not None}
+
+        with make_landmarker() as landmarker, bridge.Gesture(aspect, **overrides) as gesture:
             while True:
                 ok, bgr = cap.read()
                 if not ok:

@@ -3,7 +3,6 @@
 #include "fixtures.h"
 #include "pose.h"
 
-#define RATIO 1.15f
 #define WIDE  (16.0f / 9.0f)
 
 /* --- helpers that build variants of a real hand ------------------------- */
@@ -45,54 +44,154 @@ static gv_frame in_wide_frame(const gv_frame *square_src, float aspect)
     return out;
 }
 
+/* Fold one finger of a hand flat against its own knuckle: tip onto MCP, DIP
+ * onto PIP. Crude, but it is a curled finger by both measurements, and it lets
+ * a test change exactly one finger of a real hand. */
+static gv_frame with_finger_folded(const gv_frame *src, int mcp)
+{
+    gv_frame out = *src;
+    out.lm[mcp + 3] = src->lm[mcp];     /* TIP -> MCP */
+    out.lm[mcp + 2] = src->lm[mcp + 1]; /* DIP -> PIP */
+    return out;
+}
+
 /* --- tests -------------------------------------------------------------- */
 
-static void victory_has_index_and_middle_extended_only(void)
+static const gv_pose_limits LIM = { 1.20f, 0.93f, 1.00f, 0.75f };
+#define REAL FIXTURE_REAL_ASPECT
+
+static void posed_photo_fingers_are_judged_correctly(void)
 {
     const gv_frame *f = &fixture_victory;
     float a = FIXTURE_VICTORY_ASPECT;
-    CHECK(gv_finger_extended(f, GV_FINGER_INDEX, a, RATIO));
-    CHECK(gv_finger_extended(f, GV_FINGER_MIDDLE, a, RATIO));
-    CHECK(!gv_finger_extended(f, GV_FINGER_RING, a, RATIO));
-    CHECK(!gv_finger_extended(f, GV_FINGER_PINKY, a, RATIO));
+    CHECK(gv_finger_is_extended(f, GV_FINGER_INDEX, a, &LIM));
+    CHECK(gv_finger_is_extended(f, GV_FINGER_MIDDLE, a, &LIM));
+    CHECK(gv_finger_is_curled(f, GV_FINGER_RING, a, &LIM));
+    CHECK(gv_finger_is_curled(f, GV_FINGER_PINKY, a, &LIM));
 }
 
-static void victory_is_the_arming_pose(void)
+/* The measurement that broke the first rule: a loosely curled ring finger has
+ * a reach of about 1.12, neither clearly up nor clearly down. */
+static void a_relaxed_curl_is_neither_extended_nor_curled(void)
 {
-    CHECK(gv_pose_is_two_fingers(&fixture_victory, FIXTURE_VICTORY_ASPECT, RATIO));
+    const gv_frame *f = &fixture_real_relaxed_two;
+    CHECK_NEAR(gv_finger_reach(f, GV_FINGER_RING, REAL), 1.12f, 0.02);
+    CHECK_NEAR(gv_finger_straightness(f, GV_FINGER_RING, REAL), 0.86f, 0.02);
+    CHECK(!gv_finger_is_extended(f, GV_FINGER_RING, REAL, &LIM));
+    CHECK(!gv_finger_is_curled(f, GV_FINGER_RING, REAL, &LIM));
 }
 
-static void one_finger_is_not_the_arming_pose(void)
+/* A fist seen side-on: the curled fingers point at the camera and project to
+ * short straight lines. Straightness alone calls them extended. */
+static void a_finger_curled_towards_the_camera_is_not_extended(void)
 {
-    const gv_frame *f = &fixture_pointing_up;
-    CHECK(gv_finger_extended(f, GV_FINGER_INDEX, FIXTURE_POINTING_UP_ASPECT, RATIO));
-    CHECK(!gv_pose_is_two_fingers(f, FIXTURE_POINTING_UP_ASPECT, RATIO));
+    const gv_frame *f = &fixture_thumbs_up;
+    float a = FIXTURE_THUMBS_UP_ASPECT;
+    CHECK(gv_finger_straightness(f, GV_FINGER_RING, a) > 0.90f); /* fooled */
+    CHECK(gv_finger_reach(f, GV_FINGER_RING, a) < 0.80f);        /* not fooled */
+    CHECK(!gv_finger_is_extended(f, GV_FINGER_RING, a, &LIM));
+    CHECK(gv_finger_is_curled(f, GV_FINGER_RING, a, &LIM));
 }
 
-static void fist_with_thumb_is_not_the_arming_pose(void)
+/* Each finger is checked on its own: with an open palm the pinky alone would
+ * block arming, which would hide a rule that forgot to look at the ring. */
+static void three_fingers_up_cannot_arm(void)
 {
-    CHECK(!gv_pose_is_two_fingers(&fixture_thumbs_up, FIXTURE_THUMBS_UP_ASPECT, RATIO));
+    gv_frame ring_up = with_finger_folded(&fixture_real_open_palm, GV_PINKY_MCP);
+    CHECK(gv_finger_is_extended(&ring_up, GV_FINGER_RING, REAL, &LIM));
+    CHECK(gv_finger_is_curled(&ring_up, GV_FINGER_PINKY, REAL, &LIM));
+    CHECK(!gv_pose_can_arm(&ring_up, REAL, &LIM));
+
+    gv_frame pinky_up = with_finger_folded(&fixture_real_open_palm, GV_RING_MCP);
+    CHECK(gv_finger_is_curled(&pinky_up, GV_FINGER_RING, REAL, &LIM));
+    CHECK(!gv_pose_can_arm(&pinky_up, REAL, &LIM));
+
+    /* and folding both leaves exactly the arm pose */
+    gv_frame two_up = with_finger_folded(&ring_up, GV_RING_MCP);
+    CHECK(gv_pose_can_arm(&two_up, REAL, &LIM));
+}
+
+/* Extended means long AND straight. With the straightness bar lowered to
+ * where the side-on fist clears it easily, reach alone must still say no. */
+static void straight_but_short_is_not_extended(void)
+{
+    gv_pose_limits easy = LIM;
+    easy.extend_straight = 0.85f;
+    const gv_frame *f = &fixture_thumbs_up;
+    float a = FIXTURE_THUMBS_UP_ASPECT;
+    CHECK(gv_finger_straightness(f, GV_FINGER_RING, a) > easy.extend_straight);
+    CHECK(!gv_finger_is_extended(f, GV_FINGER_RING, a, &easy));
+    CHECK(!gv_finger_is_extended(f, GV_FINGER_PINKY, a, &easy));
+}
+
+/* ... and the other way round: long but bent. The relaxed ring finger clears a
+ * lowered reach bar, and straightness must still say no. */
+static void long_but_bent_is_not_extended(void)
+{
+    gv_pose_limits easy = LIM;
+    easy.extend_reach = 1.05f;
+    const gv_frame *f = &fixture_real_relaxed_two;
+    CHECK(gv_finger_reach(f, GV_FINGER_RING, REAL) > easy.extend_reach);
+    CHECK(!gv_finger_is_extended(f, GV_FINGER_RING, REAL, &easy));
+}
+
+static void two_fingers_can_arm_posed_tight_or_relaxed(void)
+{
+    CHECK(gv_pose_can_arm(&fixture_victory, FIXTURE_VICTORY_ASPECT, &LIM));
+    CHECK(gv_pose_can_arm(&fixture_real_tight_two, REAL, &LIM));
+    CHECK(gv_pose_can_arm(&fixture_real_relaxed_two, REAL, &LIM));
+}
+
+static void other_hand_shapes_cannot_arm(void)
+{
+    CHECK(!gv_pose_can_arm(&fixture_pointing_up, FIXTURE_POINTING_UP_ASPECT, &LIM));
+    CHECK(!gv_pose_can_arm(&fixture_thumbs_up, FIXTURE_THUMBS_UP_ASPECT, &LIM));
+    CHECK(!gv_pose_can_arm(&fixture_real_fist, REAL, &LIM));
+    CHECK(!gv_pose_can_arm(&fixture_real_open_palm, REAL, &LIM));
+}
+
+static void staying_armed_only_needs_index_and_middle(void)
+{
+    CHECK(gv_pose_can_stay(&fixture_real_tight_two, REAL, &LIM));
+    CHECK(gv_pose_can_stay(&fixture_real_relaxed_two, REAL, &LIM));
+    CHECK(gv_pose_can_stay(&fixture_real_open_palm, REAL, &LIM)); /* ring/pinky ignored */
+}
+
+static void closing_the_hand_ends_the_stay_pose(void)
+{
+    CHECK(!gv_pose_can_stay(&fixture_real_fist, REAL, &LIM));
+    CHECK(!gv_pose_can_stay(&fixture_thumbs_up, FIXTURE_THUMBS_UP_ASPECT, &LIM));
+    CHECK(!gv_pose_can_stay(&fixture_pointing_up, FIXTURE_POINTING_UP_ASPECT, &LIM)); /* middle down */
+
+    /* either of the two fingers going down is enough */
+    gv_frame index_down = with_finger_folded(&fixture_real_tight_two, GV_INDEX_MCP);
+    CHECK(!gv_pose_can_stay(&index_down, REAL, &LIM));
+    gv_frame middle_down = with_finger_folded(&fixture_real_tight_two, GV_MIDDLE_MCP);
+    CHECK(!gv_pose_can_stay(&middle_down, REAL, &LIM));
 }
 
 static void absent_hand_is_never_a_pose(void)
 {
     gv_frame f = fixture_victory; /* valid landmarks, but flagged absent */
     f.present = 0;
-    CHECK(!gv_pose_is_two_fingers(&f, FIXTURE_VICTORY_ASPECT, RATIO));
+    CHECK(!gv_pose_can_arm(&f, FIXTURE_VICTORY_ASPECT, &LIM));
+    CHECK(!gv_pose_can_stay(&f, FIXTURE_VICTORY_ASPECT, &LIM));
 }
 
 static void pose_survives_rotation(void)
 {
     for (int deg = -90; deg <= 90; deg += 45) {
         gv_frame f = rotated(&fixture_victory, FIXTURE_VICTORY_ASPECT, (float)deg);
-        CHECK(gv_pose_is_two_fingers(&f, FIXTURE_VICTORY_ASPECT, RATIO));
+        CHECK(gv_pose_can_arm(&f, FIXTURE_VICTORY_ASPECT, &LIM));
+        gv_frame r = rotated(&fixture_real_relaxed_two, REAL, (float)deg);
+        CHECK(gv_pose_can_arm(&r, REAL, &LIM));
     }
 }
 
 static void pose_survives_distance_from_camera(void)
 {
     gv_frame f = scaled(&fixture_victory, 0.4f);
-    CHECK(gv_pose_is_two_fingers(&f, FIXTURE_VICTORY_ASPECT, RATIO));
+    CHECK(gv_pose_can_arm(&f, FIXTURE_VICTORY_ASPECT, &LIM));
 }
 
 static void hand_scale_matches_measured_value(void)
@@ -150,10 +249,16 @@ static void palm_x_is_in_frame_heights(void)
 int main(void)
 {
     fprintf(stderr, "test_pose\n");
-    RUN(victory_has_index_and_middle_extended_only);
-    RUN(victory_is_the_arming_pose);
-    RUN(one_finger_is_not_the_arming_pose);
-    RUN(fist_with_thumb_is_not_the_arming_pose);
+    RUN(posed_photo_fingers_are_judged_correctly);
+    RUN(a_relaxed_curl_is_neither_extended_nor_curled);
+    RUN(a_finger_curled_towards_the_camera_is_not_extended);
+    RUN(three_fingers_up_cannot_arm);
+    RUN(straight_but_short_is_not_extended);
+    RUN(long_but_bent_is_not_extended);
+    RUN(two_fingers_can_arm_posed_tight_or_relaxed);
+    RUN(other_hand_shapes_cannot_arm);
+    RUN(staying_armed_only_needs_index_and_middle);
+    RUN(closing_the_hand_ends_the_stay_pose);
     RUN(absent_hand_is_never_a_pose);
     RUN(pose_survives_rotation);
     RUN(pose_survives_distance_from_camera);

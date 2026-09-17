@@ -58,6 +58,7 @@ static gv_ctx *start(void)
 {
     gv_config cfg = gv_default_config();
     cfg.aspect = ASPECT;
+    cfg.gain = 1.0f / 3.0f; /* pinned: expected volumes below are arithmetic on it */
     now = 0.0;
     return gv_create(&cfg);
 }

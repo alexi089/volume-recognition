@@ -59,7 +59,8 @@ def main() -> int:
         thumbs_up, _ = landmarks_from_photo(landmarker, "thumbs_up")
 
     # A real hand, held still, arms; sliding it right raises the volume.
-    with bridge.Gesture(aspect=aspect) as g:
+    # gain pinned: the expected volume below is arithmetic on it, not on the tuned default
+    with bridge.Gesture(aspect=aspect, gain=1 / 3) as g:
         g.set_current_volume(0.30)
         out, t = run(g, victory, [0.0] * 15, 0.0)
         check(out.state == bridge.ARMED, "victory photo arms after half a second")
@@ -84,6 +85,22 @@ def main() -> int:
             armed |= out.state == bridge.ARMED
             changed |= bool(out.changed)
         check(not armed and not changed, "thumbs-up sliding across the frame does nothing")
+
+    # Config crosses the boundary intact, and the C side is the one that validates it.
+    with bridge.Gesture(aspect=aspect, gain=0.15, release_grace_sec=0.4) as g:
+        c = g.config
+        check(abs(c.gain - 0.15) < 1e-6 and abs(c.release_grace_sec - 0.4) < 1e-6, "overrides reach the C config")
+        check(abs(c.pose.extend_reach - 1.20) < 1e-6 and abs(c.gate_max_speed - 30.0) < 1e-6, "nested and later fields line up (struct layout)")
+    try:
+        bridge.Gesture(aspect=aspect, gain=float("nan"))
+        check(False, "NaN gain is rejected")
+    except ValueError:
+        check(True, "NaN gain is rejected by gv_create")
+    try:
+        bridge.Gesture(aspect=aspect, no_such_field=1.0)
+        check(False, "unknown field is rejected")
+    except ValueError:
+        check(True, "unknown config field is rejected")
 
     # The volume module answers through the bridge (read-only calls).
     status, name = bridge.device_name()

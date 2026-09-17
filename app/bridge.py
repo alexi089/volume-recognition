@@ -36,14 +36,27 @@ class Output(C.Structure):
     _fields_ = [("state", C.c_int), ("volume", C.c_float), ("changed", C.c_int)]
 
 
+class PoseLimits(C.Structure):
+    _fields_ = [
+        ("extend_reach", C.c_float),
+        ("extend_straight", C.c_float),
+        ("curl_reach", C.c_float),
+        ("curl_straight", C.c_float),
+    ]
+
+
 class Config(C.Structure):
     _fields_ = [
         ("aspect", C.c_float),
-        ("finger_ratio", C.c_float),
+        ("pose", PoseLimits),
         ("arm_hold_sec", C.c_float),
         ("release_grace_sec", C.c_float),
         ("gain", C.c_float),
         ("dead_band", C.c_float),
+        ("max_slew", C.c_float),
+        ("gate_scale_min", C.c_float),
+        ("gate_scale_max", C.c_float),
+        ("gate_max_speed", C.c_float),
         ("filter_min_cutoff", C.c_float),
         ("filter_beta", C.c_float),
         ("filter_d_cutoff", C.c_float),
@@ -121,12 +134,19 @@ def _fill(frame: Frame, landmarks, t_sec: float) -> None:
 class Gesture:
     """Owns one C gv_ctx. Use as a context manager so it is always destroyed."""
 
-    def __init__(self, aspect: float):
+    def __init__(self, aspect: float, **overrides: float):
+        """overrides: top-level gv_config fields by name, e.g. gain=0.15. They
+        are passed through untouched; the C side validates the whole config."""
         cfg = _lib.gv_default_config()
         cfg.aspect = aspect
+        for name, value in overrides.items():
+            if not hasattr(cfg, name):
+                raise ValueError(f"gv_config has no field {name!r}")
+            setattr(cfg, name, value)
         self._ctx = _lib.gv_create(C.byref(cfg))
         if not self._ctx:
-            raise MemoryError("gv_create returned NULL")
+            raise ValueError("gv_create rejected the config (or ran out of memory); see gesture.h")
+        self.config = cfg
         self._aspect = aspect
         self._frame = Frame()  # reused every call; the C side only reads it
 
