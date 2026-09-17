@@ -19,6 +19,11 @@
 #include <CoreAudio/CoreAudio.h>
 #include <CoreFoundation/CoreFoundation.h>
 
+/* How far the read-back value may sit from the requested one before we call
+ * the write ignored. Devices may legitimately snap to coarse steps (1/16 =
+ * 0.0625 is common), so the tolerance has to be wider than one such step. */
+#define VOL_IGNORED_TOLERANCE 0.08f
+
 /* `static` at file scope means "private to this .c file": the linker will not
  * expose these names, so they cannot collide with anything else in the program. */
 static OSStatus g_last_os_status = noErr;
@@ -108,6 +113,18 @@ vol_status vol_set(float v)
         g_last_os_status = os;
         return VOL_ERR_OS;
     }
+
+    /* noErr does not mean the device applied the value, so read it back. */
+    Float32 actual = 0.0f;
+    UInt32 size = sizeof actual;
+    os = AudioObjectGetPropertyData(dev, &k_volume_addr, 0, NULL, &size, &actual);
+    if (os != noErr) {
+        g_last_os_status = os;
+        return VOL_ERR_OS;
+    }
+    if (fabsf(actual - value) > VOL_IGNORED_TOLERANCE)
+        return VOL_ERR_IGNORED;
+
     return VOL_OK;
 }
 
@@ -149,6 +166,7 @@ const char *vol_strerror(vol_status s)
     case VOL_ERR_NO_SOFTWARE_VOLUME: return "this output has no software volume control";
     case VOL_ERR_BAD_VALUE:          return "invalid argument";
     case VOL_ERR_OS:                 return "CoreAudio call failed";
+    case VOL_ERR_IGNORED:            return "the output accepted the volume change but did not apply it";
     }
     return "unknown error";
 }

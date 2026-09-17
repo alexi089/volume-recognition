@@ -17,13 +17,18 @@ typedef enum {
     VOL_ERR_NO_DEVICE          = -1, /* no default output device */
     VOL_ERR_NO_SOFTWARE_VOLUME = -2, /* device has no settable volume (HDMI, some DACs) */
     VOL_ERR_BAD_VALUE          = -3, /* NaN passed to vol_set, or NULL out-pointer */
-    VOL_ERR_OS                 = -4  /* CoreAudio call failed; see vol_last_os_status() */
+    VOL_ERR_OS                 = -4, /* CoreAudio call failed; see vol_last_os_status() */
+    VOL_ERR_IGNORED            = -5  /* device reported success but did not apply the value */
 } vol_status;
 
 /* Reads the current output volume into *out as a scalar in [0, 1]. */
 vol_status vol_get(float *out);
 
-/* Sets the output volume. v is clamped to [0, 1]. */
+/* Sets the output volume. v is clamped to [0, 1].
+ *
+ * The value is read back after writing. Some devices (observed: Bluetooth
+ * headphones) advertise a settable volume, return success, and change nothing;
+ * that comes back as VOL_ERR_IGNORED rather than a false VOL_OK. */
 vol_status vol_set(float v);
 
 /* Copies the default output device's name into buf (always NUL-terminated
