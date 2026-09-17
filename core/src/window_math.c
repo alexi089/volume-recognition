@@ -12,6 +12,12 @@ static double clamp(double v, double lo, double hi)
     return fmin(fmax(v, lo), hi);
 }
 
+int win_is_candidate(int layer, int is_own, win_rect bounds)
+{
+    return layer == 0 && !is_own &&
+           bounds.w >= WIN_CANDIDATE_MIN && bounds.h >= WIN_CANDIDATE_MIN;
+}
+
 win_rect win_below_menu_bar(win_rect display, win_rect bar)
 {
     /* Display and window-list rectangles are whole numbers of points, so these

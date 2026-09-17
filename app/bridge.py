@@ -23,6 +23,7 @@ KIND_NONE, KIND_VOLUME, KIND_RESIZE = 0, 1, 2
 KIND_NAMES = {KIND_NONE: None, KIND_VOLUME: "volume", KIND_RESIZE: "resize"}
 VOL_OK = 0
 WIN_OK = 0
+WIN_ERR_AX = -5
 
 
 class Point(C.Structure):
@@ -129,6 +130,8 @@ def _load() -> C.CDLL:
     lib.gv_verdict.argtypes = [C.c_int, C.POINTER(ReplaySummary)]
     lib.win_strerror.restype = C.c_char_p
     lib.win_strerror.argtypes = [C.c_int]
+    lib.win_last_ax_error.restype = C.c_int
+    lib.win_last_ax_error.argtypes = []
     lib.win_target_name.restype = C.c_int
     lib.win_target_name.argtypes = [C.c_char_p, C.c_size_t]
     for fn in (lib.gv_abi_frame_size, lib.gv_abi_config_size, lib.gv_abi_step_result_size):
@@ -175,8 +178,14 @@ def win_strerror(status: int) -> str:
     return _lib.win_strerror(status).decode()
 
 
+def win_last_ax_error() -> int:
+    """The raw AXError behind the last WIN_ERR_AX, for diagnosis."""
+    return _lib.win_last_ax_error()
+
+
 def win_target_name() -> tuple[int, str]:
-    """The app whose window a resize holds; (-2, "") when none is held."""
+    """The app whose window a resize holds. When none is held the status is -2, and the
+    name is the app a failed attempt tried (so an error can name it), or empty."""
     buf = C.create_string_buffer(128)
     status = _lib.win_target_name(buf, len(buf))
     return status, buf.value.decode(errors="replace")

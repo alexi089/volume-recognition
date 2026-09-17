@@ -38,6 +38,19 @@ win_rect win_scaled_frame(win_rect original, double scale, win_rect visible, dou
  */
 win_rect win_below_menu_bar(win_rect display, win_rect bar);
 
+/*
+ * Is an entry of the on-screen window list something a person would call a
+ * window, and so a possible target? Layer 0 is where ordinary windows live, but
+ * not everything on layer 0 is one: while the camera is in use the Window
+ * Server keeps 10 x 18 pt indicator windows there, one per menu bar, IN FRONT of
+ * every real window. The first live try picked one of those, and every resize
+ * failed (Accessibility cannot talk to the Window Server: error -25204).
+ * So: layer 0, not our own (the camera preview), and at least
+ * WIN_CANDIDATE_MIN points on each side.
+ */
+#define WIN_CANDIDATE_MIN 100.0
+int win_is_candidate(int layer, int is_own, win_rect bounds);
+
 /* --- the part that talks to macOS (window_macos.c) ----------------------- */
 
 /* The smallest a gesture may make a window. Apps enforce their own minimums on
@@ -77,7 +90,10 @@ void win_release(void);
 /* The held window's frame as last read (after win_acquire or win_apply). */
 win_status win_current_frame(win_rect *out);
 
-/* The name of the application that owns the held window, NUL-terminated. */
+/* The name of the application that owns the held window, NUL-terminated.
+ * After a FAILED win_acquire it returns WIN_ERR_NO_WINDOW and still fills in
+ * the app that was tried (empty if none was found), so the error can name it.
+ * win_release clears it. */
 win_status win_target_name(char *buf, size_t len);
 
 /* Human-readable text for a win_status. Never returns NULL. */

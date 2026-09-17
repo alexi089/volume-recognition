@@ -194,7 +194,7 @@ class Recorder:
         self._file.write(f"t_sec,present,{cols},hand\n")
         self._events_path = trace.with_suffix(".events.csv")  # created on the first event
 
-    def write(self, t_sec: float, landmarks, step=None, handedness: int = 0) -> None:
+    def write(self, t_sec: float, landmarks, step=None, handedness: int = 0, target: str = "") -> None:
         if self._file is None:
             return
         if landmarks:
@@ -207,12 +207,16 @@ class Recorder:
                 self._events = open(self._events_path, "w")
                 # New columns go on the END: older events files stay readable by position.
                 self._events.write("t_sec,state,axis,target_volume,changed,vol_status,vol_status_text,"
-                                   "kind,scale,win_status\n")
+                                   "kind,scale,win_status,win_ax_error,win_target\n")
             self._events.write(
                 f"{t_sec:.6f},{bridge.STATE_NAMES[step.out.state]},{bridge.AXIS_NAMES[step.out.axis] or '-'},"
                 f"{step.out.volume:.4f},"
                 f"{step.out.changed},{step.vol},{bridge.strerror(step.vol)},"
-                f"{bridge.KIND_NAMES[step.out.kind] or '-'},{step.out.scale:.4f},{step.win}\n"
+                f"{bridge.KIND_NAMES[step.out.kind] or '-'},{step.out.scale:.4f},{step.win},"
+                # The first live try failed on every resize and this file could not say
+                # why: it had the status but neither the raw error nor the app.
+                f"{bridge.win_last_ax_error() if step.win == bridge.WIN_ERR_AX else 0},"
+                f"{target.replace(',', ' ') or '-'}\n"
             )
 
     def close(self) -> None:
@@ -303,6 +307,8 @@ def describe_problem(step, target: str):
     The C side decided something failed; this only puts it into words."""
     if step.win != bridge.WIN_OK:
         text = bridge.win_strerror(step.win)
+        if step.win == bridge.WIN_ERR_AX:  # the raw code is what a bug report needs
+            text += f" [AXError {bridge.win_last_ax_error()}]"
         return "WINDOW NOT RESIZING", f"{text} ({target})" if target else text
     if step.vol != bridge.VOL_OK:
         _, name = bridge.device_name()
@@ -379,7 +385,7 @@ def main() -> None:
                     # Whose window a resize holds; empty outside a resize.
                     target = bridge.win_target_name()[1] if step.out.kind == bridge.KIND_RESIZE else ""
                     problem = latch.update(describe_problem(step, target), now)
-                    recorder.write(t_sec, landmarks, step, handedness)
+                    recorder.write(t_sec, landmarks, step, handedness, target)
                     hud.send(step.out, problem[1] if problem else None)
 
                 dt = now - last_frame_t

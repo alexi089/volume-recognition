@@ -209,6 +209,17 @@ Bad news first: the gesture is narrower than the approved design said.
   2144x1387 Chrome window. `leaks` reports none over acquire and release. NOT
   verified: a fixed-size window (WIN_ERR_NOT_RESIZABLE) and a missing
   Accessibility grant (WIN_ERR_NOT_TRUSTED); both need the owner's hands.
+- **The first live try failed on every resize (2026-09-17), and the cause was
+  the target, not the hand.** While the camera is in use the Window Server keeps
+  two 10 x 18 pt windows on layer 0, one per menu bar, in front of every real
+  window. "The first layer-0 window not our own" was one of those;
+  Accessibility cannot talk to the Window Server (raw error -25204), so all 5
+  resize sessions reported "an Accessibility call failed". Every earlier check
+  of the backend had run with the camera closed. Fix: `win_is_candidate`
+  (tested) also requires at least 100 pt on each side. Reproduced and confirmed
+  fixed with the camera open, the preview showing and the HUD running. The
+  banner and the events file now carry the raw AXError and the app's name, even
+  when taking hold of the window failed: not having them cost the diagnosis.
 - **The menu bar is measured, not assumed.** It is a window at the main-menu
   level in the window list, one per display: 37 pt on the notched built-in
   display, 24 pt on the ultrawide. (The plan's "25 pt on the main display only"

@@ -204,6 +204,35 @@ static void a_rectangle_that_is_not_a_bar_along_the_top_is_ignored(void)
     check_rect(win_below_menu_bar(BUILT_IN, corner), BUILT_IN);
 }
 
+/* The window list as it really was during the first live try, front to back:
+ * two Window Server indicators, the camera preview, then the user's windows. */
+static void the_camera_indicators_and_our_own_preview_are_not_targets(void)
+{
+    win_rect indicator_a = { 6682.0, -608.0, 10.0, 18.0 }, indicator_b = { 1564.0, 9.0, 10.0, 19.0 };
+    win_rect preview = { 0.0, 38.0, 640.0, 388.0 }, terminal = { 5517.0, -585.0, 1320.0, 693.0 };
+    CHECK(!win_is_candidate(0, 0, indicator_a));
+    CHECK(!win_is_candidate(0, 0, indicator_b));
+    CHECK(!win_is_candidate(0, 1, preview));   /* big enough, but ours */
+    CHECK(win_is_candidate(0, 0, terminal));
+}
+
+static void only_ordinary_windows_of_a_usable_size_are_targets(void)
+{
+    win_rect fine = { 0.0, 0.0, 400.0, 300.0 };
+    CHECK(!win_is_candidate(25, 0, fine));     /* a status item's layer */
+    CHECK(!win_is_candidate(20, 0, fine));     /* the Dock's */
+    CHECK(!win_is_candidate(-1, 0, fine));
+    win_rect narrow = { 0.0, 0.0, 99.0, 800.0 }, flat = { 0.0, 0.0, 800.0, 99.0 };
+    win_rect smallest = { 0.0, 0.0, WIN_CANDIDATE_MIN, WIN_CANDIDATE_MIN };
+    CHECK(!win_is_candidate(0, 0, narrow));    /* each side counts on its own */
+    CHECK(!win_is_candidate(0, 0, flat));
+    CHECK(win_is_candidate(0, 0, smallest));   /* the limit itself is allowed */
+    /* smaller than the smallest size a resize would set, and still a target:
+     * a small utility window can be grown */
+    win_rect small = { 0.0, 0.0, 200.0, 150.0 };
+    CHECK(win_is_candidate(0, 0, small));
+}
+
 int main(void)
 {
     fprintf(stderr, "test_window_math\n");
@@ -223,5 +252,7 @@ int main(void)
     RUN(a_displays_own_menu_bar_is_cut_off_the_top);
     RUN(another_displays_menu_bar_is_ignored);
     RUN(a_rectangle_that_is_not_a_bar_along_the_top_is_ignored);
+    RUN(the_camera_indicators_and_our_own_preview_are_not_targets);
+    RUN(only_ordinary_windows_of_a_usable_size_are_targets);
     return TEST_SUMMARY();
 }

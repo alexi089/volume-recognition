@@ -131,8 +131,8 @@ static win_rect visible_frame_at(CGPoint centre, CFArrayRef window_list)
     return frame; /* no bar: hidden, or a full-screen space */
 }
 
-/* The owner of the frontmost ordinary window. "Ordinary" is layer 0: menus,
- * the Dock, status items and floating panels (the HUD) live on higher layers. */
+/* The owner of the frontmost window a person would call a window; what counts
+ * is win_is_candidate's decision (window_math.c), where it is tested. */
 static int front_window_owner(CFArrayRef window_list, pid_t *pid_out)
 {
     const pid_t self = getpid();
@@ -140,11 +140,14 @@ static int front_window_owner(CFArrayRef window_list, pid_t *pid_out)
         CFDictionaryRef info = CFArrayGetValueAtIndex(window_list, i);
         CFNumberRef layer_ref = CFDictionaryGetValue(info, kCGWindowLayer);
         CFNumberRef pid_ref = CFDictionaryGetValue(info, kCGWindowOwnerPID);
+        CFDictionaryRef bounds_ref = CFDictionaryGetValue(info, kCGWindowBounds);
         int layer = -1, pid = 0;
-        if (!layer_ref || !pid_ref || !CFNumberGetValue(layer_ref, kCFNumberIntType, &layer) ||
-            !CFNumberGetValue(pid_ref, kCFNumberIntType, &pid))
+        CGRect bounds;
+        if (!layer_ref || !pid_ref || !bounds_ref || !CFNumberGetValue(layer_ref, kCFNumberIntType, &layer) ||
+            !CFNumberGetValue(pid_ref, kCFNumberIntType, &pid) ||
+            !CGRectMakeWithDictionaryRepresentation(bounds_ref, &bounds))
             continue;
-        if (layer != 0 || pid == self)
+        if (!win_is_candidate(layer, pid == self, from_cg(bounds)))
             continue;
 
         g_owner_name[0] = '\0';
@@ -223,9 +226,7 @@ done:
     if (window) CFRelease(window);
     if (app)    CFRelease(app);
     CFRelease(list);
-    if (status != WIN_OK)
-        g_owner_name[0] = '\0';
-    return status;
+    return status; /* g_owner_name stays set on failure: the error should name the app */
 }
 
 win_status win_apply(float scale)
@@ -288,12 +289,12 @@ win_status win_target_name(char *buf, size_t len)
 {
     if (buf == NULL || len == 0)
         return WIN_ERR_BAD_VALUE;
-    buf[0] = '\0';
-    if (g_window == NULL)
-        return WIN_ERR_NO_WINDOW;
+    /* The name is copied out even when no window is held: after a failed
+     * win_acquire it is the app that refused, which is what an error message
+     * needs. The status still says whether a window is held. */
     strncpy(buf, g_owner_name, len - 1);
     buf[len - 1] = '\0'; /* strncpy does not terminate when the source fills the buffer */
-    return WIN_OK;
+    return g_window != NULL ? WIN_OK : WIN_ERR_NO_WINDOW;
 }
 
 const char *win_strerror(win_status s)
