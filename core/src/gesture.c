@@ -1,78 +1,39 @@
 /*
- * gesture.c - the arm / slide / release state machine.
+ * gesture.c - the recogniser: one state machine for every gesture.
  *
- *   IDLE    nothing happening. The arm pose appearing starts ARMING.
- *   ARMING  arm pose seen, not yet trusted. Held for arm_hold_sec -> ARMED.
- *   ARMED   the hand is a slider: volume follows its horizontal position
- *           relative to where it was when it armed.
+ *   IDLE    nothing happening. A gesture's arm pose appearing starts ARMING it.
+ *   ARMING  pose seen, not yet trusted. Held for arm_hold_sec -> ARMED.
+ *   ARMED   the gesture is live; its definition turns each believed frame into
+ *           a value (gestures/volume.c: a volume; more to come).
  *
- * Starting is strict and carrying on is lenient (see pose.h): two fingers up
- * and the other two not to arm, then only "index and middle have not closed"
- * to stay armed. A relaxed hand's ring and pinky wander in and out of looking
- * extended, and demanding the full pose on every frame made slides drop out.
- *
- * Three rules keep accidental movement from changing the volume:
- *   - only frames that show the right pose can move the slider; every other
- *     frame freezes it, so the act of lowering the hand cannot jerk the volume;
+ * This file owns what gestures have in common, so it is written and tested
+ * once: which frames are usable at all, how long a pose must hold, release,
+ * and three rules that keep accidental movement from doing anything:
+ *   - only frames that show the right pose count; every other frame freezes
+ *     the gesture, so the act of lowering the hand cannot jerk anything;
  *   - while armed, a frame must also be plausible: the hand about the size it
  *     was, and not further away than a hand can travel in the time since the
  *     last believed frame. Anything else is a detector glitch and is ignored;
- *   - good frames may be missing for release_grace_sec before the slider lets
+ *   - good frames may be missing for release_grace_sec before the gesture lets
  *     go, because landmark models lose a frame now and then.
+ *
+ * Starting is strict and carrying on is lenient (see pose.h): a relaxed hand
+ * wanders in and out of a strict pose, and demanding it on every frame made
+ * the first version drop out mid-slide. What is particular to one gesture (its
+ * two poses, what it measures, what it reports) is a gv_gesture definition; see
+ * gesture_internal.h.
  */
 #include "gesture.h"
 
 #include <math.h>
 #include <stdlib.h>
 
-#include "filter.h"
+#include "gesture_internal.h"
 #include "pose.h"
 
 /* A hand this small (in frame heights) is noise, not a hand, and dividing
  * travel by it would blow the slider up. */
 #define MIN_HAND_SCALE 1e-3f
-
-/* The longest frame gap the slew limit gives credit for: about three frames.
- * With max_slew = 2 that bounds any single step to 0.2 of the range. */
-#define SLEW_MAX_CREDIT_SEC 0.1
-
-struct gv_ctx {
-    gv_config cfg;
-    gv_state  state;
-    gv_filter x_filter;
-    gv_filter y_filter;
-
-    float  system_volume;   /* last value given to gv_set_current_volume */
-    float  reported_volume; /* last value handed to the caller as `changed` */
-
-    double arm_started_t;   /* when the current ARMING began */
-    double last_pose_t;     /* last frame that showed the pose */
-
-    /* hand size is averaged over the arming window: one noisy frame should
-     * not set the scale for the whole slide */
-    float  scale_sum;
-    int    scale_count;
-
-    float  anchor_x;        /* filtered palm centre at the moment of arming */
-    float  anchor_y;
-    float  anchor_scale;    /* hand-length, in frame heights */
-
-    /* The slider is an accumulator, not a function of position: each believed
-     * frame adds gain(speed) * (travel since the last one). That is what lets
-     * the gain depend on speed. */
-    float  target;          /* where the hand says the volume should be, 0..1 */
-    float  last_travel;     /* travel along the chosen axis at the last believed frame */
-
-    float  believed_x;      /* raw palm centre of the last frame believed while armed */
-    float  believed_y;
-    float  believed_scale;  /* and the hand's size in that frame */
-    double believed_t;
-
-    double slew_t;          /* when the reported volume was last allowed to move */
-
-    gv_axis axis;           /* which way this slide runs; NONE until it is clear */
-    float   axis_offset;    /* signed lock distance; travel is counted from there */
-};
 
 gv_config gv_default_config(void)
 {
@@ -182,7 +143,7 @@ void gv_destroy(gv_ctx *ctx)
     free(ctx); /* free(NULL) is defined to do nothing */
 }
 
-static float clamp01(float v)
+float gv_clamp01(float v)
 {
     return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
 }
@@ -191,25 +152,49 @@ void gv_set_current_volume(gv_ctx *ctx, float volume)
 {
     if (ctx->state == GV_ARMED || !isfinite(volume))
         return;
-    ctx->system_volume = clamp01(volume);
+    ctx->system_volume = gv_clamp01(volume);
     ctx->reported_volume = ctx->system_volume;
+}
+
+/* Every gesture the recogniser knows. While idle they are tried in this order
+ * and the first whose arm pose holds starts arming; their arm poses are kept
+ * mutually exclusive (a test asserts it), so the order decides nothing. An
+ * array of pointers to const structs: adding a gesture is one line here. */
+static const gv_gesture *const k_gestures[] = {
+    &gv_gesture_volume,
+};
+#define GESTURE_COUNT ((int)(sizeof k_gestures / sizeof k_gestures[0]))
+
+/* The gesture this frame could arm (idle), or the one already arming if this
+ * frame still shows its arm pose. NULL if neither. */
+static const gv_gesture *find_arming_gesture(const gv_ctx *ctx, const gv_frame *frame)
+{
+    if (ctx->state == GV_ARMING)
+        return ctx->active->can_arm(frame, &ctx->cfg) ? ctx->active : NULL;
+    for (int i = 0; i < GESTURE_COUNT; i++)
+        if (k_gestures[i]->can_arm(frame, &ctx->cfg))
+            return k_gestures[i];
+    return NULL;
 }
 
 static void go_idle(gv_ctx *ctx)
 {
     ctx->state = GV_IDLE;
-    ctx->axis = GV_AXIS_NONE;
+    if (ctx->active != NULL)
+        ctx->active->on_idle(ctx);
+    ctx->active = NULL;
     gv_filter_reset(&ctx->x_filter);
     gv_filter_reset(&ctx->y_filter);
 }
 
-static void start_arming(gv_ctx *ctx, double t)
+static void start_arming(gv_ctx *ctx, const gv_gesture *gesture, double t)
 {
     ctx->state = GV_ARMING;
+    ctx->active = gesture;
     ctx->arm_started_t = t;
     ctx->scale_sum = 0.0f;
     ctx->scale_count = 0;
-    ctx->axis = GV_AXIS_NONE;
+    gesture->on_idle(ctx); /* a gesture starts from its own clean state */
     gv_filter_reset(&ctx->x_filter);
     gv_filter_reset(&ctx->y_filter);
 }
@@ -225,76 +210,6 @@ static int frame_is_usable(const gv_frame *f)
         if (!isfinite(f->lm[i].x) || !isfinite(f->lm[i].y))
             return 0;
     return 1;
-}
-
-/* Decide which way this slide runs, if it is clear yet.
- *
- * The two axes are deliberately not added together. Measured on real slides, a
- * sideways sweep wanders 0.7 - 1.6 hand-lengths vertically, because an arm
- * swings in an arc and because the hand is often still rising into place as it
- * arms. Added in, that would be 13 - 32% of unasked-for volume. So one axis is
- * chosen per slide, by the first movement that is both far enough to be
- * deliberate and clearly ahead of the movement on the other axis; a diagonal
- * chooses nothing, however far it goes. */
-static int choose_axis(gv_ctx *ctx, float right, float up)
-{
-    const gv_config *cfg = &ctx->cfg;
-    float ax = fabsf(right), ay = fabsf(up);
-
-    /* The offset is the lock distance itself (signed), not wherever the hand
-     * happens to be on the frame that settles it. Frames are discrete, so the
-     * hand is always somewhat past the line by then, and after a fast move it
-     * can be far past it; using its position would throw that travel away. */
-    if (ax >= cfg->axis_lock_hands && ax >= cfg->axis_dominance * ay) {
-        ctx->axis = GV_AXIS_X;
-        ctx->axis_offset = copysignf(cfg->axis_lock_hands, right);
-    } else if (ay >= cfg->axis_lock_hands && ay >= cfg->axis_dominance * ax) {
-        ctx->axis = GV_AXIS_Y;
-        ctx->axis_offset = copysignf(cfg->axis_lock_hands, up);
-    }
-    return ctx->axis != GV_AXIS_NONE;
-}
-
-/* Is the hand up against the edge of the picture that this slide is heading
- * for? Returns +1 (keep getting louder), -1 (keep getting quieter) or 0.
- *
- * "Heading for" is judged by the travel so far, not by position alone: a hand
- * that armed beside the left edge and is sliding right is not being pushed
- * left, and a raised hand's wrist is near the bottom of the picture most of
- * the time without meaning anything by it.
- *
- * Which landmark counts depends on the edge, because the hand is not a point:
- * sideways it is whichever landmark sticks out furthest; upwards it is the two
- * raised fingertips, which leave the picture first; downwards it is the wrist. */
-static int edge_push(const gv_config *cfg, const gv_frame *f, gv_axis axis, float travel)
-{
-    const float lo = cfg->edge_margin, hi = 1.0f - cfg->edge_margin;
-
-    if (axis == GV_AXIS_X) {
-        float min_x = f->lm[0].x, max_x = f->lm[0].x;
-        for (int i = 1; i < GV_NUM_LANDMARKS; i++) {
-            if (f->lm[i].x < min_x) min_x = f->lm[i].x;
-            if (f->lm[i].x > max_x) max_x = f->lm[i].x;
-        }
-        if (travel > 0.0f && max_x > hi) return +1;
-        if (travel < 0.0f && min_x < lo) return -1;
-    } else if (axis == GV_AXIS_Y) {
-        float tip = fminf(f->lm[GV_INDEX_TIP].y, f->lm[GV_MIDDLE_TIP].y);
-        if (travel > 0.0f && tip < lo) return +1;                 /* y grows downwards */
-        if (travel < 0.0f && f->lm[GV_WRIST].y > hi) return -1;
-    }
-    return 0;
-}
-
-/* Gain as a function of hand speed (hand-lengths per second): flat at `gain`
- * up to accel_speed_lo, flat at `gain_fast` from accel_speed_hi, a straight
- * line between. The same idea as pointer acceleration on a mouse: one fixed
- * gain is either too twitchy to set a level or too slow to get anywhere. */
-static float gain_at(const gv_config *cfg, float speed)
-{
-    float k = (speed - cfg->accel_speed_lo) / (cfg->accel_speed_hi - cfg->accel_speed_lo);
-    k = clamp01(k);
-    return cfg->gain + k * (cfg->gain_fast - cfg->gain);
 }
 
 /* While armed: could this frame be the same hand as the last believed one?
@@ -352,14 +267,14 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
      * plausibility gate. */
     int good;
     if (ctx->state == GV_ARMED) {
-        good = usable && gv_pose_can_stay(frame, cfg->aspect, &cfg->pose);
+        good = usable && ctx->active->can_stay(frame, cfg);
         if (good) {
             raw_x = gv_palm_x(frame, cfg->aspect);
             raw_y = gv_palm_y(frame);
             good = frame_is_plausible(ctx, frame, raw_x, raw_y, t);
         }
     } else {
-        good = usable && gv_pose_can_arm(frame, cfg->aspect, &cfg->pose);
+        good = usable && find_arming_gesture(ctx, frame) != NULL;
         if (good) {
             raw_x = gv_palm_x(frame, cfg->aspect);
             raw_y = gv_palm_y(frame);
@@ -372,7 +287,7 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
     if (ctx->state != GV_IDLE && t - ctx->last_pose_t > (double)cfg->release_grace_sec) {
         go_idle(ctx);
         /* Having just let go, this frame is judged as a fresh start. */
-        good = usable && gv_pose_can_arm(frame, cfg->aspect, &cfg->pose);
+        good = usable && find_arming_gesture(ctx, frame) != NULL;
         if (good) {
             raw_x = gv_palm_x(frame, cfg->aspect);
             raw_y = gv_palm_y(frame);
@@ -381,7 +296,7 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
 
     if (good) {
         if (ctx->state == GV_IDLE)
-            start_arming(ctx, t);
+            start_arming(ctx, find_arming_gesture(ctx, frame), t);
         ctx->last_pose_t = t;
 
         /* The filter runs through ARMING as well, so that by the time we arm
@@ -402,12 +317,11 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
                     ctx->anchor_x = x;
                     ctx->anchor_y = y;
                     ctx->anchor_scale = scale;
-                    ctx->target = ctx->system_volume;
                     ctx->believed_x = raw_x;
                     ctx->believed_y = raw_y;
                     ctx->believed_scale = gv_hand_scale(frame, cfg->aspect);
                     ctx->believed_t = t;
-                    ctx->slew_t = t;
+                    ctx->active->on_armed(ctx, frame, x, y, t);
                 }
             }
         } else if (ctx->state == GV_ARMED) {
@@ -417,76 +331,7 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
             ctx->believed_scale = gv_hand_scale(frame, cfg->aspect);
             ctx->believed_t = t;
 
-            /* Travel from the anchor in hand-lengths, louder-positive on both
-             * axes. Image y grows downwards, so "up" is the negative direction. */
-            float right = (x - ctx->anchor_x) / ctx->anchor_scale;
-            float up = -(y - ctx->anchor_y) / ctx->anchor_scale;
-
-            if (ctx->axis == GV_AXIS_NONE && choose_axis(ctx, right, up))
-                ctx->last_travel = 0.0f; /* travel is counted from the lock distance */
-
-            /* Until an axis is chosen the volume stays where it was. After
-             * that, travel is counted from the lock distance, so the slider
-             * starts from zero instead of jumping, and a small adjustment
-             * stays possible. */
-            if (ctx->axis != GV_AXIS_NONE) {
-                float travel = (ctx->axis == GV_AXIS_X ? right : up) - ctx->axis_offset;
-
-                /* A 16:9 picture has 1.78x less room top to bottom than side to
-                 * side, so vertical travel counts that much more: the same
-                 * fraction of the picture gives the same change on either axis. */
-                if (ctx->axis == GV_AXIS_Y)
-                    travel *= cfg->aspect;
-
-                float moved = travel - ctx->last_travel;
-                ctx->last_travel = travel;
-
-                double dt = t - since_t;
-                float speed = dt > 0.0 ? fabsf(moved) / (float)dt : 0.0f;
-                float step = gain_at(cfg, speed) * moved;
-
-                /* Held against the edge the slide was heading for: keep going.
-                 * The time credited is capped like the slew limit's, so a run
-                 * of lost frames cannot turn into one big push. */
-                double held = dt > SLEW_MAX_CREDIT_SEC ? SLEW_MAX_CREDIT_SEC : dt;
-                if (held > 0.0)
-                    step += (float)edge_push(cfg, frame, ctx->axis, travel) *
-                            copysignf(cfg->edge_rate, cfg->gain) * (float)held;
-
-                /* Clamped as it accumulates: pushing past an end must not
-                 * build up a dead zone to come back through. */
-                ctx->target = clamp01(ctx->target + step);
-            }
-            float target = ctx->target;
-
-            /* Slew limit: move towards where the hand says, but no faster than
-             * max_slew. The allowance scales with the time since the last
-             * believed frame, so a slow frame rate does not slow the slider
-             * down; but that time is capped, so a run of lost frames cannot
-             * bank up permission for one big jump. The moment after a gap is
-             * exactly when the detector is most likely to be wrong. */
-            double since = t - ctx->slew_t;
-            if (since > SLEW_MAX_CREDIT_SEC)
-                since = SLEW_MAX_CREDIT_SEC;
-            float allowance = cfg->max_slew * (float)since;
-            float wanted = target - ctx->reported_volume;
-            if (wanted > allowance)
-                target = ctx->reported_volume + allowance;
-            else if (wanted < -allowance)
-                target = ctx->reported_volume - allowance;
-            ctx->slew_t = t;
-
-            /* The ends of the range bypass the dead-band: without this the
-             * last step to 0 or 1 is swallowed and the slider can never quite
-             * reach silence or full volume. Exact float comparison is sound
-             * here because clamp01 returns the literals 0.0f and 1.0f. */
-            int at_end = (target == 0.0f || target == 1.0f) && target != ctx->reported_volume;
-
-            if (at_end || fabsf(target - ctx->reported_volume) >= cfg->dead_band) {
-                ctx->reported_volume = target;
-                ctx->system_volume = target;
-                changed = 1;
-            }
+            changed = ctx->active->on_frame(ctx, frame, x, y, t, since_t);
         }
     }
 
