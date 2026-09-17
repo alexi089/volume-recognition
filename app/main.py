@@ -48,8 +48,20 @@ def make_landmarker(image_mode: bool = False) -> vision.HandLandmarker:
     return vision.HandLandmarker.create_from_options(options)
 
 
+CAPTURE_SIZE = (1280, 720)
+PREVIEW_WIDTH = 960
+
+
 def open_camera(index: int) -> cv2.VideoCapture:
     cap = cv2.VideoCapture(index)
+    # The camera defaults to 1920x1080. MediaPipe shrinks every frame to a few
+    # hundred pixels before looking at it, so the extra resolution buys nothing
+    # and costs a flip, a colour conversion and a window redraw per frame: the
+    # first live session ran at 21 fps with the preview against 27 without.
+    # This is a request; the camera may answer with something else, and the
+    # aspect ratio is read from the frames actually delivered.
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAPTURE_SIZE[0])
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAPTURE_SIZE[1])
     ok, _ = cap.read() if cap.isOpened() else (False, None)
     if not ok:
         cap.release()
@@ -277,6 +289,9 @@ def main() -> None:
 
                 if args.no_preview:
                     continue
+                if bgr.shape[1] > PREVIEW_WIDTH:
+                    scale = PREVIEW_WIDTH / bgr.shape[1]
+                    bgr = cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
                 draw_overlay(bgr, landmarks, step.out.state, step.out.volume, error, fps)
                 cv2.imshow("volume gesture", bgr)
                 if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
