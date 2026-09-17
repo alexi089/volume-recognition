@@ -230,7 +230,9 @@ float gv_pinch_gap(const gv_frame *f, float aspect);   /* dist(thumb tip, index 
 int   gv_pose_can_arm_resize(const gv_frame *f, float aspect, const gv_pose_limits *lim);
 int   gv_pose_can_stay_resize(const gv_frame *f, float aspect, const gv_pose_limits *lim);
 ```
-`can_arm_resize`: present AND thumb out (`thumb_out > thumb_out_extend`) AND index extended AND middle, ring, pinky NOT extended AND `gv_pinch_gap >= pinch_gap_min`. `can_stay_resize`: present AND index not curled AND thumb not in (`thumb_out >= thumb_out_curl`).
+`can_arm_resize`: present AND thumb out AND index extended AND middle, ring, pinky NOT extended AND `gv_pinch_gap >= pinch_gap_min`. `can_stay_resize`: present AND thumb not in AND middle NOT extended.
+
+**Amended after Task 1 (see the spec's "Thumb measurements"):** the thumb is judged like a finger, on reach AND straightness, not on tip-to-index-knuckle distance, which turned out larger with the thumb tucked in than out. The limits are therefore `thumb_extend_reach` 1.05, `thumb_extend_straight` 0.67, `thumb_curl_reach` 0.55, `thumb_curl_straight` 0.45 (replacing `thumb_out_extend` / `thumb_out_curl`), plus `pinch_gap_min` 0.73; the functions are `gv_thumb_reach`, `gv_thumb_straightness`, `gv_thumb_is_out`, `gv_thumb_is_in`. The index finger is NOT part of the stay pose: pinching curls it (reach 0.57). Fixture frames: `pinch_open` = probe_pinch_open line 240, `pinch_closed` = probe_pinch_move line 23, `pointing_thumb_in` = probe_pointing line 211.
 
 - [ ] **Step 1:** Add to `gen_fixtures.py` a second source dict `PROBE_FRAMES = {"pinch_open": ("probe_pinch_open", N1), "pinch_closed": ("probe_pinch_move", N2), "pointing_thumb_in": ("probe_pointing", N3)}` with Task 1's line numbers, emitted as `fixture_real_pinch_open` etc. with the probe's aspect. Regenerate `fixtures.h`. (The clips themselves stay uncommitted; `fixtures.h` is the committed copy.)
 - [ ] **Step 2: Failing tests** in `test_pose.c` (limits literal uses Task 1's numbers):

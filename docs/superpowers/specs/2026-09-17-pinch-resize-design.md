@@ -82,16 +82,57 @@ typedef struct {
 - **Rate limit in log space** (about 2x per second, credit across lost frames
   capped as for volume), so a tracking glitch is a ramp that the release timer
   cuts short, not a window snapping across the screen.
-- **Arming needs a gap of at least ~0.3 hand-lengths.** Touching fingertips
+- **Arming needs a gap of at least 0.73 hand-lengths (measured).** Touching fingertips
   hide each other, which is where tracking is worst, and a tiny starting gap
   makes the ratio explode.
-- **Stay pose:** thumb and index not curled; the other three are not checked,
-  for the same reason volume's stay pose is lenient.
-- **The thumb rule is not designed yet.** The code ignores the thumb today and
-  no recording of a pinch-ready hand exists. Thresholds (candidates: thumb-tip
-  distance from the index knuckle over hand size; thumb straightness; angle
-  between thumb and index) are set from a measurement clip, the way the finger
-  thresholds were: that clip is step 1 of the plan.
+- **Stay pose:** thumb not in, and middle finger not extended (see "Thumb
+  measurements": pinching curls the index, so the index cannot be part of it).
+- **The thumb rule was set from a measurement clip**, the way the finger
+  thresholds were; see "Thumb measurements" below.
+
+### Thumb measurements (2026-09-17, four 10 s probe clips, hand found in every frame)
+
+5th / 50th / 95th percentiles; distances as `pose.c` measures them.
+
+| Measurement | pinch-ready, held | pinch and spread | pointing, thumb in |
+|---|---|---|---|
+| thumb tip to index knuckle, over hand size | 0.73 / 0.83 / 0.89 | 0.05 / 0.55 / 1.00 | 0.84 / 1.11 / 1.28 |
+| thumb reach (tip-wrist over MCP-wrist) | 1.72 / 1.81 / 1.88 | 1.55 / 1.82 / 1.92 | 0.12 / 0.36 / 0.53 |
+| thumb straightness (CMC-tip over bone length) | 0.96 / 0.97 / 0.98 | 0.90 / 0.97 / 0.99 | 0.33 / 0.39 / 0.44 |
+| fingertip gap, hand-lengths | 1.46 / 1.61 / 1.77 | 0.13 / 1.46 / 2.06 | n/a |
+| index reach | 1.30 / 1.32 / 1.36 | 0.57 / 1.32 / 1.37 | 0.91 / 1.24 / 1.31 |
+| middle reach | 0.39 / 0.44 / 0.62 | 0.22 / 0.29 / 0.38 | unreliable (hand foreshortened) |
+
+What they decided:
+
+- **The measure first proposed does not work.** Thumb tip to index knuckle is
+  LARGER with the thumb tucked in (it lies across the curled fingers, away from
+  the index knuckle) than in the pinch-ready pose. Per the plan's rule the
+  alternatives were evaluated instead.
+- **Thumb out = long AND straight**, the same shape of rule as the fingers.
+  Thresholds by the midpoint rule: reach above 1.05 (midway between 0.53 and
+  1.55) and straightness above 0.67 (midway between 0.44 and 0.90). **Thumb in**
+  = reach below 0.55 OR straightness below 0.45.
+- **Pinching curls the index finger**: its reach falls to 0.57 at the pinched
+  end, which the finger rule calls curled. A stay pose that needs the index
+  "not curled" would release the resize exactly when the user pinches. The
+  thumb stays out through the whole pinch (reach never below 1.55). So the stay
+  pose is: thumb not in, AND middle finger not extended. Tucking the thumb
+  (a fist), opening the hand, or leaving the frame releases.
+- **Minimum gap to arm: 0.73 hand-lengths** (half the 5th percentile of the held
+  pose).
+- **A hand only opens so far.** Armed at the typical 1.6 hand-lengths the gap
+  can reach about 2.06, a scale of 1.3x; pinching goes down to the 0.25x clamp.
+  To grow a window a lot, arm with the fingers closer together (down to 0.73)
+  or re-arm. This is a property of hands, not a tuning problem; the README says
+  so.
+- The third clip was meant to be the volume pose but shows the middle finger
+  curled, i.e. a second pinch-ready clip. Not needed: the recorded sessions hold
+  ample volume-pose data, and volume and resize are separated by the middle
+  finger (extended in one, not extended in the other).
+- Pointing at the screen foreshortens the hand and the landmarks get unreliable
+  (middle reach up to 4.5). The pose rules only ever see such frames as
+  negatives, which is the safe direction.
 
 ### The window backend (`window_macos.c`, behind `window.h`)
 

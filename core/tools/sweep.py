@@ -39,10 +39,12 @@ def load_trace(path: Path):
             aspect = float(line.split("=")[1])
             continue
         v = line.strip().split(",")
-        if len(v) != 65 or not v[0][:1].isdigit():
+        # 65 fields, or 66 since recordings carry MediaPipe's left/right label
+        if len(v) not in (65, 66) or not v[0][:1].isdigit():
             continue
         f = [float(x) for x in v]
-        rows.append((f[0], [P(*f[2 + 3 * i : 5 + 3 * i]) for i in range(21)] if f[1] else None))
+        hand = int(f[65]) if len(f) == 66 else 0
+        rows.append((f[0], [P(*f[2 + 3 * i : 5 + 3 * i]) for i in range(21)] if f[1] else None, hand))
     return aspect, rows
 
 
@@ -81,8 +83,8 @@ def run_clip(name: str, overrides: dict):
     with make_gesture(aspect, overrides) as g:
         g.set_current_volume(START_VOLUME)
         sessions, changes, armings, prev, t0, volume = [], 0, 0, bridge.IDLE, 0.0, START_VOLUME
-        for t, lm in rows:
-            o = g.update(lm, t)
+        for t, lm, hand in rows:
+            o = g.update(lm, t, hand)
             if o.state == bridge.ARMING and prev == bridge.IDLE:
                 armings += 1
             if o.state == bridge.ARMED and prev != bridge.ARMED:
