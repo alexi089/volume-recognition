@@ -1,0 +1,55 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "C: state machine tests",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/core/build/test_gesture",
+      "cwd": "${workspaceFolder}/core",
+      "preLaunchTask": "build core"
+    },
+    {
+      "name": "C: filter tests",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/core/build/test_filter",
+      "cwd": "${workspaceFolder}/core",
+      "preLaunchTask": "build core"
+    },
+    {
+      "name": "C: pose tests",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/core/build/test_pose",
+      "cwd": "${workspaceFolder}/core",
+      "preLaunchTask": "build core"
+    },
+    {
+      "name": "C: replay slide-right trace",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/core/build/replay",
+      "args": ["${workspaceFolder}/traces/synthetic_slide_right.csv", "up"],
+      "cwd": "${workspaceFolder}/core",
+      "preLaunchTask": "build core"
+    },
+    {
+      "name": "C: vol get (CoreAudio)",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/core/build/vol",
+      "args": ["get"],
+      "cwd": "${workspaceFolder}/core",
+      "preLaunchTask": "build core"
+    },
+    {
+      "name": "Python: app/main.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/app/main.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ]
+}
