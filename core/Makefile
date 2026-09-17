@@ -10,12 +10,12 @@ BUILD   := build
 # these bugs otherwise pass silently until they corrupt something unrelated.
 SAN     := -fsanitize=address,undefined -fno-omit-frame-pointer
 
-TESTS   := test_filter test_pose test_gesture
+TESTS   := test_filter test_pose test_gesture test_step
 TEST_BINS := $(addprefix $(BUILD)/,$(TESTS))
 
 .PHONY: all test clean
 
-all: $(BUILD)/vol
+all: $(BUILD)/vol $(BUILD)/libgesture.dylib
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -34,6 +34,18 @@ CORE_HDR := include/gesture.h src/pose.h src/filter.h
 
 $(BUILD)/test_gesture: tests/test_gesture.c tests/fixtures.h $(CORE_SRC) $(CORE_HDR) tests/test.h | $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) tests/test_gesture.c $(CORE_SRC) -lm -o $@
+
+# The shared library the Python side loads with ctypes. No sanitizers here: an
+# ASan-instrumented dylib cannot be loaded into an uninstrumented Python.
+LIB_SRC := $(CORE_SRC) src/step.c src/step_system.c src/volume_macos.c
+
+$(BUILD)/libgesture.dylib: $(LIB_SRC) $(CORE_HDR) include/step.h include/volume.h | $(BUILD)
+	$(CC) $(CFLAGS) -O2 -dynamiclib $(LIB_SRC) $(AUDIO) -lm -o $@
+
+# test_step links step.c but NOT volume_macos.c: it supplies a fake backend,
+# and gv_system_volume / gv_step_system live in step_system.c for that reason.
+$(BUILD)/test_step: tests/test_step.c tests/fixtures.h src/step.c include/step.h $(CORE_SRC) $(CORE_HDR) tests/test.h | $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) tests/test_step.c src/step.c $(CORE_SRC) -lm -o $@
 
 # Run every test binary; stop at the first one that fails.
 test: $(TEST_BINS)
