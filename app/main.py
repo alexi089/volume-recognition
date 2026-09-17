@@ -171,8 +171,7 @@ class Recorder:
         self._file.write(f"# aspect={aspect:.6f}\n")
         cols = ",".join(f"x{i},y{i},z{i}" for i in range(bridge.NUM_LANDMARKS))
         self._file.write(f"t_sec,present,{cols}\n")
-        self._events = open(trace.with_suffix(".events.csv"), "w")
-        self._events.write("t_sec,state,axis,target_volume,changed,vol_status,vol_status_text\n")
+        self._events_path = trace.with_suffix(".events.csv")  # created on the first event
 
     def write(self, t_sec: float, landmarks, step=None) -> None:
         if self._file is None:
@@ -183,6 +182,9 @@ class Recorder:
             values = ",".join(["0"] * (3 * bridge.NUM_LANDMARKS))
         self._file.write(f"{t_sec:.6f},{1 if landmarks else 0},{values}\n")
         if step is not None:
+            if self._events is None:  # tools that record landmarks only leave no empty file behind
+                self._events = open(self._events_path, "w")
+                self._events.write("t_sec,state,axis,target_volume,changed,vol_status,vol_status_text\n")
             self._events.write(
                 f"{t_sec:.6f},{bridge.STATE_NAMES[step.out.state]},{bridge.AXIS_NAMES[step.out.axis] or '-'},"
                 f"{step.out.volume:.4f},"
