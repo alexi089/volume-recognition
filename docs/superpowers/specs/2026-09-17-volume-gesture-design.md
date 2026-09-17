@@ -53,7 +53,7 @@ int vol_get(float *out);   /* 0 ok, <0 error incl. "output has no software volum
 int vol_set(float v);
 ```
 
-## Behaviour
+## Behaviour (first design; superseded by "Round 2" below after the live session)
 
 - **Finger extended:** `dist(tip, wrist) > k * dist(pip, wrist)`. Independent of
   hand rotation and image axes.
@@ -149,6 +149,51 @@ int vol_set(float v);
 - Landmark jitter is small: the stillest second while armed had a palm-x
   standard deviation worth 0.39% of volume, unfiltered.
 
+## Round 2: what changed after the live session (2026-09-17)
+
+Owner's decision on release: strict two-finger pose to arm; once armed, stay
+armed while index and middle remain extended; release by closing the hand or
+leaving the frame.
+
+- **Two measurements per finger.** Reach (tip vs PIP distance from the wrist)
+  is fooled by a relaxed curl; straightness (MCP-to-tip over bone length) is
+  fooled by a finger curled towards the camera, which projects short but
+  straight (the thumbs-up photo's ring finger reads 0.93). MediaPipe's z does
+  not rescue it: 3D straightness on the same finger is still 0.89. Extended =
+  reach > 1.20 AND straightness > 0.93; curled = reach < 1.00 OR straightness
+  < 0.75; between them is an ambiguous band.
+- **Strict to arm, lenient to stay.** Arm: index and middle extended, ring and
+  pinky not extended. Stay: index and middle not curled. No per-finger memory.
+  A prototype showed per-finger hysteresis with the old stay rule changed
+  nothing (69 -> 69 sessions); the stay rule is what matters.
+- **Plausibility gate while armed.** Hand size within 0.7x - 1.4x of the last
+  believed frame (real: 0.75 - 1.26 at the 0.5th / 99.5th percentile; glitches:
+  0.01 and 10.8), and movement in the plane under 30 hand-lengths/s from the
+  last believed frame (real sweeps: 12.5 at p99, 28 at p99.9). Two earlier
+  versions were wrong and the recording showed it: gating size against the
+  arming moment nearly doubled dropped slides (41 sessions against 23 ungated),
+  because a hand tilts and drifts over seconds; and a 15/s limit rejected real
+  sweeps, which then caught up in one jump.
+- **Slew limit.** 2.0 per second, with at most 0.1 s of credit across a gap, so
+  no single step exceeds 0.2. Without the cap, a 0.23 s gap earned a 0.46 jump.
+- **Gain** 1/3 -> 0.2; **release grace** 150 -> 250 ms; **capture** 1280x720
+  with a 960 px preview (22.1 -> 28.7 fps with the preview, no hand in view).
+- **A naive target, corrected.** The plan asked for "no single-frame volume
+  step above 0.05". At 21 fps a real 12 hand-lengths/s sweep legitimately moves
+  about 0.1 per frame. The honest bound is the slew limit's 0.2.
+
+Result on the recording, old core against new: 69 -> 32 armed sessions, median
+0.9 -> 2.4 s, under one second 40 -> 9, biggest single-frame step 0.673 ->
+0.200. These are proxies: the recording has no intent labels, and a longer
+session is only probably a better one. Scripted recordings with known intent,
+negatives above all, are the real test and do not exist yet.
+
+Considered and held back: MediaPipe's trained GestureRecognizer (Victory /
+Closed_Fist / Open_Palm). It may well beat hand-written geometry. It would move
+the key decision out of the C this project exists to teach, and "Victory" is a
+spread V rather than two fingers up. It is the fallback if scripted recordings
+cannot reach clean positives with zero negative triggers.
+
 ## Changes from the plan
 
 - `vol_*` lives in its own `volume.h` rather than in `gesture.h`, keeping the
@@ -165,9 +210,8 @@ int vol_set(float v);
 
 ## Still unverified
 
-- **The live camera loop has never been run.** The session that built this had
-  no camera permission (`OpenCV: not authorized to capture video`); it has to be
-  launched from VS Code's or Terminal's own shell.
+- **The reworked core has not been tried live.** Everything in "Round 2" was
+  measured by replaying the first session's recording.
 - Landmark jitter at arm's length in room light, and with it every tuning
   constant: gain, hold and grace times, filter parameters.
 - No real recorded traces exist yet. The four in `traces/` are synthetic: real
