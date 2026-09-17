@@ -10,7 +10,7 @@ BUILD   := build
 # these bugs otherwise pass silently until they corrupt something unrelated.
 SAN     := -fsanitize=address,undefined -fno-omit-frame-pointer
 
-TESTS   := test_filter
+TESTS   := test_filter test_pose
 TEST_BINS := $(addprefix $(BUILD)/,$(TESTS))
 
 .PHONY: all test clean
@@ -25,6 +25,9 @@ $(BUILD)/vol: tools/vol.c src/volume_macos.c include/volume.h | $(BUILD)
 
 $(BUILD)/test_filter: tests/test_filter.c src/filter.c src/filter.h tests/test.h | $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) tests/test_filter.c src/filter.c -lm -o $@
+
+$(BUILD)/test_pose: tests/test_pose.c tests/fixtures.h src/pose.c src/pose.h include/gesture.h tests/test.h | $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) tests/test_pose.c src/pose.c -lm -o $@
 
 # Run every test binary; stop at the first one that fails.
 test: $(TEST_BINS)
