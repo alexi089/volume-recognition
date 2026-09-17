@@ -91,12 +91,56 @@ int vol_set(float v);
 - `mediapipe` depends on `opencv-contrib-python`. Installing `opencv-python`
   alongside it makes two packages fight over the `cv2` module.
 
+## Findings from the build (2026-09-17)
+
+- **Outputs without software volume, confirmed on hardware:** a DisplayPort
+  monitor exposes no virtual main volume property at all; reported as
+  `VOL_ERR_NO_SOFTWARE_VOLUME`.
+- **A failure mode the design did not anticipate:** a Bluetooth headset
+  advertised a settable volume, returned `noErr` on every write, and changed
+  nothing; AppleScript's `set volume` was ignored the same way, while the same
+  write on the built-in speakers applied. Later in the day the same headset
+  accepted writes normally, so it is a transient device state, not a property
+  of the device. `vol_set` now reads the value back and returns
+  `VOL_ERR_IGNORED` when it differs by more than 0.08. Best-effort; its blind
+  spots are listed in `core/include/volume.h`.
+- **Aspect ratio had to become an input.** Landmark x and y are normalised by
+  width and height separately, so they are different physical units on a 16:9
+  frame. Every distance in `pose.c` takes the frame aspect; without it a hand's
+  measured size changes as it rotates.
+- **The finger threshold is measured, not guessed:** extended fingers give a
+  tip/PIP distance ratio of 1.32 - 1.48 on the fixture photos, curled ones
+  0.29 - 0.70; the threshold is 1.15.
+- **A bug the tests caught before it shipped:** the dead-band swallowed the last
+  step, so the slider could not reach exactly 0 or 1. The ends of the range
+  bypass it.
+- **End-to-end on the real backend:** fixture landmarks slid 0.45 hand-lengths
+  through `gv_step_system` moved the system volume 0.50 -> 0.64, confirmed
+  independently through AppleScript.
+
+## Changes from the plan
+
+- `vol_*` lives in its own `volume.h` rather than in `gesture.h`, keeping the
+  gesture header portable.
+- Added `step.c`: the per-frame glue (read volume, update, apply) is C too, with
+  the volume backend injected as function pointers so it is testable with a
+  fake. Python makes one call per frame.
+- `replay.c` is a tool under `core/tools/` driven by `traces/manifest.txt`,
+  not a test file.
+- Added after the plan, at the owner's request: a separate native glass-style
+  HUD process (`hud/`, Swift + `NSVisualEffectView`) fed JSON lines by Python.
+  Apple's Liquid Glass APIs need macOS 26 and its SDK; this machine has macOS
+  15.1 and Command Line Tools only, so the HUD uses the older native material.
+
 ## Still unverified
 
-- Camera permission flow when launched from VS Code's terminal.
-- CoreAudio behaviour on outputs with no software volume (HDMI/DisplayPort
-  monitors, some USB DACs). Must be detected and reported.
-- Landmark jitter at arm's length in room light; sets the filter constants.
+- **The live camera loop has never been run.** The session that built this had
+  no camera permission (`OpenCV: not authorized to capture video`); it has to be
+  launched from VS Code's or Terminal's own shell.
+- Landmark jitter at arm's length in room light, and with it every tuning
+  constant: gain, hold and grace times, filter parameters.
+- No real recorded traces exist yet. The four in `traces/` are synthetic: real
+  hand shapes, scripted motion, no jitter.
 
 ## Testing
 
