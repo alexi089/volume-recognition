@@ -235,11 +235,13 @@ final class HudContentView: NSView {
 
     /// Rebuild the glyph image. Call only when the symbol name or error state
     /// actually changes. On error the glyph SHAPE changes (a badge symbol) in
-    /// addition to the tint, so colour is never the only signal.
-    func setGlyph(symbolName: String, isError: Bool) {
+    /// addition to the tint, so colour is never the only signal. (The resize
+    /// symbol has no badge variant: there the error LINE is the second signal.)
+    /// `what` names the thing for VoiceOver: "volume" or "window size".
+    func setGlyph(symbolName: String, isError: Bool, what: String) {
         let config = NSImage.SymbolConfiguration(pointSize: glyphPointSize, weight: .semibold)
         let image = NSImage(systemSymbolName: symbolName,
-                            accessibilityDescription: isError ? "volume, error" : "volume level")?
+                            accessibilityDescription: isError ? "\(what), error" : what)?
             .withSymbolConfiguration(config)
         image?.isTemplate = true
         glyphView.image = image

@@ -9,6 +9,7 @@
 //   {"state":"idle","volume":0.50,"error":null}
 //   {"state":"armed","volume":0.62,"axis":"x","error":null}
 //   {"state":"armed","volume":0.62,"error":"the output ... did not apply it"}
+//   {"state":"armed","volume":0.62,"gesture":"resize","scale":1.32,"error":null}
 //
 // Behaviours worth knowing (verified against this SDK's JSONSerialization):
 //   - Duplicate keys: the FIRST occurrence wins.
@@ -33,21 +34,60 @@ enum HudAxis: String, Equatable, Sendable {
     case y
 }
 
+/// Which gesture the line is about. Absent or unrecognised means volume, so a
+/// sender that predates the field keeps working.
+enum HudGesture: String, Equatable, Sendable {
+    case volume
+    case resize
+}
+
 /// One fully-validated line ready for the UI. `volume` is always in 0...1
 /// (finite out-of-range inputs are clamped). `error` is nil when there is no
 /// error (absent, null, or all-whitespace are normalised to nil). `axis` is nil
-/// until a direction is known.
+/// until a direction is known. `scale` is the window scale of a resize, always
+/// in 0.25...4 (1.0 when absent or unusable); it means nothing for volume.
 struct HudMessage: Equatable, Sendable {
     var state: HudState
     var volume: Double
     var error: String?
     var axis: HudAxis?
+    var gesture: HudGesture
+    var scale: Double
 
-    init(state: HudState, volume: Double, error: String?, axis: HudAxis? = nil) {
+    static let scaleRange: ClosedRange<Double> = 0.25...4.0
+
+    init(state: HudState, volume: Double, error: String?, axis: HudAxis? = nil,
+         gesture: HudGesture = .volume, scale: Double = 1.0) {
         self.state = state
         self.volume = volume
         self.error = error
         self.axis = axis
+        self.gesture = gesture
+        self.scale = scale
+    }
+}
+
+/// What the pill shows for a message. Pure arithmetic, kept here (Foundation
+/// only) so it is tested with the parser rather than through AppKit.
+enum HudReadout {
+
+    /// The number next to the bar: the volume, or the window scale, as a percentage.
+    static func percentValue(for m: HudMessage) -> Int {
+        let fraction = m.gesture == .resize ? m.scale : m.volume
+        return Int((fraction * 100).rounded())
+    }
+
+    static func percentText(for m: HudMessage) -> String {
+        "\(percentValue(for: m))%"
+    }
+
+    /// How full the bar is, 0...1. Volume is its own level. A scale is a ratio,
+    /// so the bar is logarithmic: 1.0x sits in the middle, and halving takes
+    /// away as much bar as doubling adds (0.25x empty, 4x full).
+    static func barLevel(for m: HudMessage) -> Double {
+        guard m.gesture == .resize else { return m.volume }
+        let lo = log2(HudMessage.scaleRange.lowerBound), hi = log2(HudMessage.scaleRange.upperBound)
+        return min(max((log2(m.scale) - lo) / (hi - lo), 0), 1)
     }
 }
 
@@ -93,6 +133,12 @@ enum HudMessageParser {
     ///               that is empty after trimming -> nil.
     ///  - `axis`   : optional; "x" | "y". Absent, null, or anything else -> nil,
     ///               and the line is NOT rejected for a bad axis.
+    ///  - `gesture`: optional; "volume" | "resize". Anything else -> volume, and
+    ///               the line is NOT rejected.
+    ///  - `scale`  : optional; a finite number, clamped into 0.25...4. Absent,
+    ///               null, a boolean, a string or non-finite -> 1.0, and the
+    ///               line is NOT rejected (the scale is decoration, the state
+    ///               is what drives the HUD).
     ///  - Unknown extra fields are ignored; duplicate keys -> first wins.
     static func parse(_ rawLine: String) -> Result<HudMessage, HudParseError> {
         let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -160,7 +206,18 @@ enum HudMessageParser {
             axis = HudAxis(rawValue: s)            // unrecognised string -> nil
         }
 
-        return .success(HudMessage(state: state, volume: volume, error: errorText, axis: axis))
+        // gesture + scale (lenient, like axis) --------------------------------
+        var gesture = HudGesture.volume
+        if let raw = dict["gesture"] as? String, let g = HudGesture(rawValue: raw) {
+            gesture = g
+        }
+        var scale = 1.0
+        if let n = dict["scale"] as? NSNumber, !isBoolean(n), n.doubleValue.isFinite {
+            scale = min(max(n.doubleValue, HudMessage.scaleRange.lowerBound), HudMessage.scaleRange.upperBound)
+        }
+
+        return .success(HudMessage(state: state, volume: volume, error: errorText, axis: axis,
+                                   gesture: gesture, scale: scale))
     }
 
     /// Clamp a FINITE value into 0...1. Non-finite inputs are rejected upstream,

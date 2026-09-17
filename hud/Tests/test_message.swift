@@ -82,6 +82,7 @@ struct TestMain {
         visibilityTests(h)
         optionsTests(h)
         screenTests(h)
+        readoutTests(h)
         print("\n\(h.passed) passed, \(h.failed) failed")
         exit(h.failed > 0 ? 1 : 0)
     }
@@ -92,6 +93,33 @@ struct TestMain {
     /// origin, an ultrawide to its right and 288 pt up. The HUD used
     /// NSScreen.main, which is "the screen with keyboard focus", not "the main
     /// display"; it landed on the ultrawide while the owner watched the built-in.
+    /// What the pill shows for a message: pure arithmetic, no AppKit.
+    static func readoutTests(_ h: Harness) {
+        func check(_ cond: Bool, _ label: String, _ detail: @autoclosure () -> String = "") {
+            if cond { h.ok(label) } else { h.fail(label, detail()) }
+        }
+        func near(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-9 }
+        let vol = HudMessage(state: .armed, volume: 0.62, error: nil)
+        check(HudReadout.percentText(for: vol) == "62%", "volume readout is the volume", HudReadout.percentText(for: vol))
+        check(near(HudReadout.barLevel(for: vol), 0.62), "volume bar is the volume")
+        check(HudReadout.percentValue(for: vol) == 62, "volume percent value")
+
+        func resize(_ s: Double) -> HudMessage {
+            HudMessage(state: .armed, volume: 0.62, error: nil, gesture: .resize, scale: s)
+        }
+        check(HudReadout.percentText(for: resize(1.32)) == "132%", "resize readout is the scale, as a percentage")
+        check(HudReadout.percentText(for: resize(0.25)) == "25%", "resize readout at the smallest scale")
+        check(near(HudReadout.barLevel(for: resize(1.0)), 0.5), "scale 1.0 is the middle of the bar")
+        check(near(HudReadout.barLevel(for: resize(4.0)), 1.0), "scale 4 fills the bar")
+        check(near(HudReadout.barLevel(for: resize(0.25)), 0.0), "scale 0.25 empties the bar")
+        check(near(HudReadout.barLevel(for: resize(2.0)), 0.75), "the bar is logarithmic: 2x is three quarters")
+        check(near(HudReadout.barLevel(for: resize(0.5)), 0.25), "and 0.5x is one quarter")
+        // a volume of 0.62 must not leak into the resize readout, nor a scale into the volume one
+        let volWithScale = HudMessage(state: .armed, volume: 0.10, error: nil, gesture: .volume, scale: 3.0)
+        check(HudReadout.percentText(for: volWithScale) == "10%" && near(HudReadout.barLevel(for: volWithScale), 0.10),
+              "a volume message ignores its scale")
+    }
+
     static func screenTests(_ h: Harness) {
         func check(_ cond: Bool, _ label: String, _ detail: @autoclosure () -> String = "") {
             if cond { h.ok(label) } else { h.fail(label, detail()) }
@@ -219,6 +247,39 @@ struct TestMain {
         h.expectSuccess(#"{"state":"armed","volume":0.5,"axis":3,"error":null}"#,
                         HudMessage(state: .armed, volume: 0.5, error: nil, axis: nil),
                         "non-string axis -> nil, line accepted")
+
+        // gesture + scale: optional, lenient, never a reason to reject the line
+        h.expectSuccess(#"{"state":"armed","volume":0.5,"gesture":"resize","scale":1.32,"error":null}"#,
+                        HudMessage(state: .armed, volume: 0.5, error: nil, gesture: .resize, scale: 1.32),
+                        "resize gesture and scale parsed")
+        h.expectSuccess(#"{"state":"armed","volume":0.5,"gesture":"volume","scale":1,"error":null}"#,
+                        HudMessage(state: .armed, volume: 0.5, error: nil), "gesture volume is the default")
+        h.expectSuccess(#"{"state":"armed","volume":0.5,"error":null}"#,
+                        HudMessage(state: .armed, volume: 0.5, error: nil, gesture: .volume, scale: 1.0),
+                        "absent gesture and scale -> volume, 1.0 (an older sender)")
+        h.expectSuccess(#"{"state":"armed","volume":0.5,"gesture":"swipe","scale":2,"error":null}"#,
+                        HudMessage(state: .armed, volume: 0.5, error: nil, gesture: .volume, scale: 2.0),
+                        "unknown gesture -> volume, line accepted")
+        h.expectSuccess(#"{"state":"armed","volume":0.5,"gesture":7,"scale":null,"error":null}"#,
+                        HudMessage(state: .armed, volume: 0.5, error: nil), "non-string gesture, null scale -> defaults")
+        h.expectSuccess(#"{"state":"armed","volume":0.5,"gesture":"resize","scale":9,"error":null}"#,
+                        HudMessage(state: .armed, volume: 0.5, error: nil, gesture: .resize, scale: 4.0),
+                        "scale above 4 clamps to 4")
+        h.expectSuccess(#"{"state":"armed","volume":0.5,"gesture":"resize","scale":0.01,"error":null}"#,
+                        HudMessage(state: .armed, volume: 0.5, error: nil, gesture: .resize, scale: 0.25),
+                        "scale below 0.25 clamps to 0.25")
+        h.expectSuccess(#"{"state":"armed","volume":0.5,"gesture":"resize","scale":-3,"error":null}"#,
+                        HudMessage(state: .armed, volume: 0.5, error: nil, gesture: .resize, scale: 0.25),
+                        "negative scale clamps, line accepted")
+        h.expectSuccess(#"{"state":"armed","volume":0.5,"gesture":"resize","scale":"big","error":null}"#,
+                        HudMessage(state: .armed, volume: 0.5, error: nil, gesture: .resize, scale: 1.0),
+                        "string scale -> 1.0, line accepted")
+        h.expectSuccess(#"{"state":"armed","volume":0.5,"gesture":"resize","scale":true,"error":null}"#,
+                        HudMessage(state: .armed, volume: 0.5, error: nil, gesture: .resize, scale: 1.0),
+                        "boolean scale -> 1.0, line accepted")
+        h.expectSuccess(#"{"state":"armed","volume":0.5,"gesture":"resize","scale":-1e400,"error":null}"#,
+                        HudMessage(state: .armed, volume: 0.5, error: nil, gesture: .resize, scale: 1.0),
+                        "non-finite scale -> 1.0, line accepted")
 
         // Extra unknown fields ignored; lenient missing error key
         h.expectSuccess(#"{"state":"idle","volume":0.5,"error":null,"extra":123,"note":"x"}"#,

@@ -131,11 +131,13 @@ class Hud:
         os.set_blocking(self._fd, False)
         self._blocked_since = None
 
-    def send(self, state: int, volume: float, error: str | None, axis: int = bridge.AXIS_NONE) -> None:
+    def send(self, out, error: str | None) -> None:
+        """One line per frame, straight from the C output (`out` is a bridge.Output)."""
         if self._proc is None:
             return
-        message = {"state": bridge.STATE_NAMES[state], "volume": round(volume, 4), "error": error,
-                   "axis": bridge.AXIS_NAMES[axis]}
+        message = {"state": bridge.STATE_NAMES[out.state], "volume": round(out.volume, 4), "error": error,
+                   "axis": bridge.AXIS_NAMES[out.axis], "gesture": bridge.KIND_NAMES[out.kind],
+                   "scale": round(out.scale, 3)}
         line = json.dumps(message) + "\n"
         try:
             os.write(self._fd, line.encode())
@@ -203,11 +205,14 @@ class Recorder:
         if step is not None:
             if self._events is None:  # tools that record landmarks only leave no empty file behind
                 self._events = open(self._events_path, "w")
-                self._events.write("t_sec,state,axis,target_volume,changed,vol_status,vol_status_text\n")
+                # New columns go on the END: older events files stay readable by position.
+                self._events.write("t_sec,state,axis,target_volume,changed,vol_status,vol_status_text,"
+                                   "kind,scale,win_status\n")
             self._events.write(
                 f"{t_sec:.6f},{bridge.STATE_NAMES[step.out.state]},{bridge.AXIS_NAMES[step.out.axis] or '-'},"
                 f"{step.out.volume:.4f},"
-                f"{step.out.changed},{step.vol},{bridge.strerror(step.vol)}\n"
+                f"{step.out.changed},{step.vol},{bridge.strerror(step.vol)},"
+                f"{bridge.KIND_NAMES[step.out.kind] or '-'},{step.out.scale:.4f},{step.win}\n"
             )
 
     def close(self) -> None:
@@ -220,8 +225,10 @@ class Recorder:
 AXIS_HINTS = {bridge.AXIS_NONE: "move left/right or up/down", bridge.AXIS_X: "left / right", bridge.AXIS_Y: "up / down"}
 
 
-def draw_overlay(frame, landmarks, state: int, volume: float, error: str | None, fps: float,
-                 axis: int = bridge.AXIS_NONE) -> None:
+def draw_overlay(frame, landmarks, out, problem, fps: float, target: str = "") -> None:
+    """`out` is the C output for this frame; `problem` is None or (headline, detail);
+    `target` is the app whose window a resize holds."""
+    state, volume, axis = out.state, out.volume, out.axis
     h, w = frame.shape[:2]
     colour = STATE_COLOURS[state]
     if landmarks:
@@ -232,7 +239,9 @@ def draw_overlay(frame, landmarks, state: int, volume: float, error: str | None,
             cv2.circle(frame, (x, y), 4, (255, 255, 255), -1)
 
     label = f"{bridge.STATE_NAMES[state].upper()}  {fps:4.1f} fps"
-    if state == bridge.ARMED:
+    if out.kind == bridge.KIND_RESIZE:
+        label += f"   RESIZE x{out.scale:.2f}  {target}"
+    elif state == bridge.ARMED:
         label += f"   {AXIS_HINTS[axis]}"
     cv2.putText(frame, label, (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, colour, 2)
 
@@ -249,12 +258,13 @@ def draw_overlay(frame, landmarks, state: int, volume: float, error: str | None,
     cv2.putText(frame, f"{round(volume * 100)}%", (x0, y0 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1,
                 cv2.LINE_AA)
 
-    if error:
-        # A failed volume write means the whole app is doing nothing useful, so
-        # it gets a banner across the frame rather than a line in the corner.
+    if problem:
+        # A failed write means the whole app is doing nothing useful, so it
+        # gets a banner across the frame rather than a line in the corner.
+        headline, detail = problem
         cv2.rectangle(frame, (0, 44), (w, 44 + 56), (40, 40, 200), -1)
-        cv2.putText(frame, "VOLUME NOT CHANGING", (12, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-        cv2.putText(frame, error, (12, 92), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+        cv2.putText(frame, headline, (12, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.putText(frame, detail, (12, 92), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
 
 
 def draw_prompt(frame, prompt: str, remaining: float, recording: bool) -> None:
@@ -271,28 +281,34 @@ def draw_prompt(frame, prompt: str, remaining: float, recording: bool) -> None:
 
 
 class ErrorLatch:
-    """Keeps the last error on screen for a moment. Volume status only appears
-    on the frames that actually wrote, so without this the banner would blink
-    on and off at frame rate. Display persistence only; nothing here decides
-    anything about the gesture."""
+    """Keeps the last problem on screen for a moment. A write's status only
+    appears on the frames that actually wrote, so without this the banner would
+    blink on and off at frame rate. Display persistence only; nothing here
+    decides anything about the gesture."""
 
     HOLD_SEC = 2.0
 
     def __init__(self):
-        self._text = None
+        self._problem = None
         self._until = 0.0
 
-    def update(self, error: str | None, now: float) -> str | None:
-        if error:
-            self._text, self._until = error, now + self.HOLD_SEC
-        return self._text if now < self._until else None
+    def update(self, problem, now: float):
+        if problem:
+            self._problem, self._until = problem, now + self.HOLD_SEC
+        return self._problem if now < self._until else None
 
 
-def describe_error(status: int) -> str | None:
-    if status == bridge.VOL_OK:
-        return None
-    _, name = bridge.device_name()
-    return f"{bridge.strerror(status)} ({name.strip()})" if name.strip() else bridge.strerror(status)
+def describe_problem(step, target: str):
+    """None, or (headline, detail) for the banner; the detail also goes to the HUD.
+    The C side decided something failed; this only puts it into words."""
+    if step.win != bridge.WIN_OK:
+        text = bridge.win_strerror(step.win)
+        return "WINDOW NOT RESIZING", f"{text} ({target})" if target else text
+    if step.vol != bridge.VOL_OK:
+        _, name = bridge.device_name()
+        text = bridge.strerror(step.vol)
+        return "VOLUME NOT CHANGING", f"{text} ({name.strip()})" if name.strip() else text
+    return None
 
 
 def main() -> None:
@@ -360,9 +376,11 @@ def main() -> None:
                     break
                 if live:
                     step = gesture.step(landmarks, t_sec, handedness)
-                    error = latch.update(describe_error(step.vol), now)
+                    # Whose window a resize holds; empty outside a resize.
+                    target = bridge.win_target_name()[1] if step.out.kind == bridge.KIND_RESIZE else ""
+                    problem = latch.update(describe_problem(step, target), now)
                     recorder.write(t_sec, landmarks, step, handedness)
-                    hud.send(step.out.state, step.out.volume, error, step.out.axis)
+                    hud.send(step.out, problem[1] if problem else None)
 
                 dt = now - last_frame_t
                 last_frame_t = now
@@ -375,7 +393,7 @@ def main() -> None:
                     scale = PREVIEW_WIDTH / bgr.shape[1]
                     bgr = cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
                 if live:
-                    draw_overlay(bgr, landmarks, step.out.state, step.out.volume, error, fps, step.out.axis)
+                    draw_overlay(bgr, landmarks, step.out, problem, fps, target)
                 if args.prompt:
                     remaining = (args.duration - t_sec) if (live and args.duration) else -t_sec
                     draw_prompt(bgr, args.prompt, max(remaining, 0.0), recording=live)

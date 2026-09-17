@@ -434,11 +434,18 @@ gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *b)
 **Files:**
 - Modify: `app/main.py`, `app/bridge.py`, `app/test_bridge.py`, `hud/Sources/HudMessage.swift`, `hud/Sources/HudContentView.swift`, `hud/Sources/AppController.swift`, `hud/Tests/test_message.swift`, `hud/README.md`
 
-- [ ] **Step 1:** `test_bridge.py` tests the plumbing only: `Output` has `kind` and `scale`, `StepResult` has `win`, a default-config `Gesture` reports `kind == 0` and `scale == 1.0` with no hand, and the ABI sizes match. Resize BEHAVIOUR is tested in C (Task 5); the probe clips are not committed, so Python has no pinch landmarks to feed, and exporting C fixtures through ctypes just to repeat a C test is not worth a new API.
-- [ ] **Step 2:** `main.py`: overlay label `RESIZE x{scale:.2f}  {target app}` when `kind == resize`; the error latch also takes `win` status text; HUD message gains `"gesture": bridge.KIND_NAMES[kind]` and `"scale": round(scale, 3)`; events file gains `kind,scale,win_status` columns.
-- [ ] **Step 3 (HUD, test-first in `test_message.swift`):** `gesture` optional, `"volume" | "resize"`, anything else -> volume (never rejects the line); `scale` optional finite number, clamped 0.25 - 4, default 1. For resize the pill shows `arrow.up.left.and.arrow.down.right` and `"{scale * 100, rounded}%"`, and the bar shows `log2(scale)` mapped from [-2, 2] to [0, 1] (so 1.0x is the middle). Same fade / pulse / error behaviour. Update `hud/README.md`'s contract.
-- [ ] **Step 4:** `make test > log 2>&1; echo $?` -> 0 (app not running). **Commit** `feat(app): show the resize gesture in the overlay and the HUD`.
+- [x] **Step 1:** `test_bridge.py` tests the plumbing only: `Output` has `kind` and `scale`, `StepResult` has `win`, a default-config `Gesture` reports `kind == 0` and `scale == 1.0` with no hand, and the ABI sizes match. Resize BEHAVIOUR is tested in C (Task 5); the probe clips are not committed, so Python has no pinch landmarks to feed, and exporting C fixtures through ctypes just to repeat a C test is not worth a new API.
+- [x] **Step 2:** `main.py`: overlay label `RESIZE x{scale:.2f}  {target app}` when `kind == resize`; the error latch also takes `win` status text; HUD message gains `"gesture": bridge.KIND_NAMES[kind]` and `"scale": round(scale, 3)`; events file gains `kind,scale,win_status` columns.
+- [x] **Step 3 (HUD, test-first in `test_message.swift`):** `gesture` optional, `"volume" | "resize"`, anything else -> volume (never rejects the line); `scale` optional finite number, clamped 0.25 - 4, default 1. For resize the pill shows `arrow.up.left.and.arrow.down.right` and `"{scale * 100, rounded}%"`, and the bar shows `log2(scale)` mapped from [-2, 2] to [0, 1] (so 1.0x is the middle). Same fade / pulse / error behaviour. Update `hud/README.md`'s contract.
+- [x] **Step 4:** `make test > log 2>&1; echo $?` -> 0 (app not running). **Commit** `feat(app): show the resize gesture in the overlay and the HUD`.
 
+
+**As built (2026-09-17):**
+- The bridge plumbing tests of Step 1 landed with Tasks 5 and 8 (`win`, the last config fields pinned by value, an idle step).
+- The banner now says WHICH thing is failing (`WINDOW NOT RESIZING` / `VOLUME NOT CHANGING`); `describe_problem` only words a status the C side produced. `Hud.send` and `draw_overlay` take the C output struct instead of a growing argument list.
+- HUD: the readout arithmetic is a Foundation-only `HudReadout` (percent text, logarithmic bar level), tested with the parser: 105 checks. The glyph is rebuilt when the error flag changes as well as the symbol name, because the resize symbol has no error variant; VoiceOver hears "window size", not "volume".
+- Verified without a camera: `py_compile`, the banner wording, the overlay drawing, and the JSON line `{"gesture": "resize", "scale": 1.322, ...}`. NOT verified: the running camera loop with these changes, and how the resize pill looks. Both belong to Task 10's live check.
+- Coming (owner's decision, 2026-09-17): the laptop moves to macOS 26, after which the pill's material can be Apple's Liquid Glass (`NSGlassEffectView`) behind `if #available(macOS 26, *)`, keeping `NSVisualEffectView` as the fallback. That needs the macOS 26 SDK (Command Line Tools 26), not only the OS, and nothing here has been compiled against it yet.
 ---
 
 ### Task 10: Live check, traces, docs, review

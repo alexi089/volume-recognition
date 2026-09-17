@@ -22,6 +22,7 @@ AXIS_NAMES = {AXIS_NONE: None, AXIS_X: "x", AXIS_Y: "y"}
 KIND_NONE, KIND_VOLUME, KIND_RESIZE = 0, 1, 2
 KIND_NAMES = {KIND_NONE: None, KIND_VOLUME: "volume", KIND_RESIZE: "resize"}
 VOL_OK = 0
+WIN_OK = 0
 
 
 class Point(C.Structure):

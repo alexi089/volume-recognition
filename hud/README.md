@@ -23,6 +23,13 @@ level bar, and a percentage. It contains no gesture, audio, or camera logic.
   arrow (`arrow.left.and.right` / `arrow.up.and.down`) appears next to the
   percentage. The bar is never rotated. The arrow sits in a fixed-width slot, so
   it never changes the pill's size.
+- **Resize:** when `gesture` is "resize" the glyph is
+  `arrow.up.left.and.arrow.down.right`, the number is the window scale as a
+  percentage ("132%"), and the bar is logarithmic: 1.0x is the middle, 0.25x
+  empty, 4x full, so halving takes away as much bar as doubling adds. No axis
+  arrow. That symbol has no error-badge variant: on error it tints, and the error
+  line is the second signal. This arithmetic is `HudReadout` and is tested; how
+  it LOOKS has not been seen by anyone yet.
 - **Error:** when `error` is non-null the glyph changes shape (a
   speaker-with-exclamation-badge symbol), tints with the system warning colour,
   and a compact second line shows the message; the pill grows to fit it. Colour
@@ -75,6 +82,10 @@ every camera frame (~28-30/s), including a continuous stream while idle.
 | volume  | yes      | A **finite** JSON number, clamped into 0..1. Booleans, strings, and non-finite values → line rejected. |
 | error   | no       | JSON null or string. Absent, null, or a string that is **empty after trimming** → no error. Other types → line rejected. |
 | axis    | no       | "x" \| "y". Absent, null, or anything else (bad string, number, …) → treated as null; the line is **not** rejected. |
+| gesture | no       | "volume" \| "resize". Absent, null, or anything else → "volume"; the line is **not** rejected, so a sender that predates the field keeps working. |
+| scale   | no       | The window scale of a resize: a finite number, clamped into 0.25..4. Absent, null, a boolean, a string or non-finite → 1.0; the line is **not** rejected. Ignored for volume. |
+
+    {"state":"armed","volume":0.62,"axis":null,"gesture":"resize","scale":1.32,"error":null}
 
 Details verified against this SDK's `JSONSerialization`:
 

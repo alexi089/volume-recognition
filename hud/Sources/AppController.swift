@@ -24,6 +24,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     // Content diff state.
     private var lastApplied: HudMessage?
     private var lastGlyphName: String?
+    private var lastGlyphIsError = false
     private var lastAxisSymbol: String?
 
     // Motion budget: 150-300 ms, ease-in-out.
@@ -71,20 +72,25 @@ final class AppController: NSObject, NSApplicationDelegate {
         if lastApplied == message { return }        // drop identical repeats (MED-4)
         lastApplied = message
 
-        let percent = Int((message.volume * 100).rounded())
+        let percent = HudReadout.percentValue(for: message)
         let isError = message.error != nil
 
         // Glyph: rebuild only when the symbol name changes. Slash exactly at 0%.
-        let glyphName = Self.symbolName(percent: percent, isError: isError)
-        if glyphName != lastGlyphName {
-            content.setGlyph(symbolName: glyphName, isError: isError)
+        let glyphName = Self.symbolName(gesture: message.gesture, percent: percent, isError: isError)
+        // (Or the error flag: the resize symbol is the same with and without an
+        // error, and only its tint says which.)
+        if glyphName != lastGlyphName || isError != lastGlyphIsError {
+            content.setGlyph(symbolName: glyphName, isError: isError,
+                             what: message.gesture == .resize ? "window size" : "volume")
             lastGlyphName = glyphName
+            lastGlyphIsError = isError
         }
 
-        content.setPercent("\(percent)%")
+        content.setPercent(HudReadout.percentText(for: message))
 
-        // Directional arrow: rebuild only when it changes.
-        let axisSymbol = Self.axisSymbol(for: message.axis)
+        // Directional arrow: rebuild only when it changes. A resize has no
+        // direction to show; its glyph already says what is happening.
+        let axisSymbol = message.gesture == .volume ? Self.axisSymbol(for: message.axis) : nil
         if axisSymbol != lastAxisSymbol {
             content.setAxisArrow(symbolName: axisSymbol)
             lastAxisSymbol = axisSymbol
@@ -96,8 +102,8 @@ final class AppController: NSObject, NSApplicationDelegate {
         // Bar level always; animate only once armed (avoids stacking with the
         // fade-in + pulse during arming, LOW-6). Emphasis reflects the axis.
         let animateBar = message.state == .armed && !reduceMotion && isOrderedIn
-        content.barView.setLevel(CGFloat(message.volume), animated: animateBar)
-        content.barView.setEmphasis(full: message.axis != nil,
+        content.barView.setLevel(CGFloat(HudReadout.barLevel(for: message)), animated: animateBar)
+        content.barView.setEmphasis(full: message.axis != nil || message.gesture == .resize,
                                     animated: !reduceMotion && isOrderedIn)
 
         if sizeChanged && isOrderedIn { resizeAndReposition() }
@@ -230,7 +236,16 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     /// Speaker variant by rounded percentage (slash EXACTLY at 0%, LOW-5), or a
     /// warning-badge variant on error (a shape change, not just a tint).
-    static func symbolName(percent: Int, isError: Bool) -> String {
+    static func symbolName(gesture: HudGesture, percent: Int, isError: Bool) -> String {
+        if gesture == .resize {
+            // No error variant of this symbol exists; the red error line and
+            // border carry the error for a resize.
+            for candidate in ["arrow.up.left.and.arrow.down.right", "arrow.up.backward.and.arrow.down.forward"] {
+                if NSImage(systemSymbolName: candidate, accessibilityDescription: nil) != nil {
+                    return candidate
+                }
+            }
+        }
         if isError {
             for candidate in ["speaker.badge.exclamationmark.fill",
                               "speaker.badge.exclamationmark",
