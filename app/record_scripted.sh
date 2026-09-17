@@ -3,13 +3,19 @@
 # record_scripted.sh - record the scripted clips the tuning needs, one after
 # another, each with its instruction on the preview and a get-ready countdown.
 #
-#   app/record_scripted.sh            all seven clips (about 6 minutes)
+#   app/record_scripted.sh            all nine clips (about 7 minutes)
 #   app/record_scripted.sh typing     just the clips whose name contains "typing"
+#   app/record_scripted.sh pinch      just the two resize clips
 #
-# Two clips must change the volume (up, down). Five must NOT change it at all:
+# Two clips must change the volume (up, down) and two must resize a window
+# (shrink, grow). Five must change NOTHING, neither the volume nor a window:
 # they are the ordinary things a person does in front of a camera, and they are
 # what the thresholds get tuned against. Afterwards each clip is replayed
 # through the C core and checked against its expectation.
+#
+# The pinch clips REALLY resize whichever window is in front (not the camera
+# preview). Shrink comes first and grow second, so the window mostly comes back;
+# put a window you do not mind resizing in front before starting.
 #
 # Run from the repo root. Quit a clip early with q; Ctrl-C stops the whole run.
 
@@ -24,6 +30,8 @@ FILTER="${1:-}"
 CLIPS=(
 "real_slide_up|up|RAISE the volume: two fingers up, slide right (or up), close your hand. Repeat about 5 times."
 "real_slide_down|down|LOWER the volume: two fingers up, slide left (or down), close your hand. Repeat about 5 times."
+"real_pinch_shrink|shrink|SHRINK the front window: thumb and index out in an L, other fingers curled. Pinch SLOWLY, watching the window, then lower your hand. About 4 times."
+"real_pinch_grow|grow|GROW the front window: start the L with fingertips closer together, spread SLOWLY, watching the window, then lower your hand. About 4 times."
 "real_typing|none|Just TYPE on the keyboard and use the trackpad, as you normally would."
 "real_nose_scratch|none|TOUCH YOUR FACE, with EITHER hand: scratch your nose, rub your eyes, fix your hair, rest your chin on a hand."
 "real_cup_reach|none|REACH FOR THINGS: pick up a cup or your phone, drink, put it back, stretch."
