@@ -389,3 +389,84 @@ and whether that 8% ever eats a real flick, are open questions until a guided
 clip exists - Task 7. `flick_travel`, `flick_window_sec` and
 `flick_max_sideways` remain proxies from this spec; only the refractory and the
 size condition are measured, and they are measured against negatives only.
+
+### Task 5 (the backend): the flick reaches the window, and the read-back had to learn to wait
+
+`gv_window_ops` gains `minimize()`, wired to a new `win_minimize` that takes
+the front window by the resize's rule (minus the resizable check - fixed-size
+windows minimise perfectly well), writes `kAXMinimized`, confirms it, and keeps
+the element for `win_restore`, the way back for the command-line tool. The glue
+calls it on the one frame a flick fires. `win minimize` and `win restore` are
+new subcommands of `core/build/win`.
+
+**By-hand check (a), `core/build/win minimize`: it failed the first time, and
+the failure was in the check, not the window.** The tool reported
+
+```
+win: minimize: the window accepted the change and did not change ...
+target     Slack
+```
+
+on a window that had in fact minimised: Slack was gone from the on-screen
+window list straight afterwards, and its `kAXMinimized` read `true`. (It was
+put back by hand; nothing was left in the Dock.) The spec's Backend bullet says
+"set the Accessibility 'minimized' attribute, read it back", and a single
+immediate read-back cannot work. Measured with a scratch probe, on Terminal and
+on Slack:
+
+| after a `kAXMinimized = true` write that returned kAXErrorSuccess | the attribute reads |
+| --- | --- |
+| 0 ms (immediately) | **false** |
+| ~309 ms | the read itself FAILS: kAXErrorCannotComplete (-25204), after blocking the full 0.25 s messaging timeout - the app is busy animating the window into the Dock |
+| ~568 ms | true |
+
+So the read-back now waits for the window: poll every 30 ms up to a 1.0 s
+deadline (1.75x the settling time measured), counting "the app is too busy to
+answer" as *not yet* rather than as a failure, and reporting `WIN_ERR_IGNORED`
+only when the deadline passes with the window still where it was.
+`win_restore` waits the same way, for the same reason. Second run, after the
+fix: `target Terminal / minimized ok / restored ok`, exit 0, the window back at
+the front.
+
+That first failure left Slack in the Dock with nothing holding a handle on it,
+so `win_minimize` now keeps the window element as soon as the WRITE succeeds,
+whatever the read-back then decides, and `win minimize` always attempts the way
+back even when the minimise complained. A minimised window is off the window
+list; the handle is the only route to it, and the case where the read-back
+cannot confirm the window is exactly the case where someone needs that route.
+
+**The price, stated plainly: `win_minimize` BLOCKS for about 0.6 s**, and up to
+a second on a window that will not minimise. In the live app that is the camera
+loop, so a flick will cost roughly 18 dropped frames on the frame it fires - a
+visible hitch in the preview and the HUD, on a gesture whose whole appeal is
+that it is instant. The alternatives are worse or bigger: trusting the write's
+success code drops the verification this project exists to insist on (and the
+resize's own "29 of 70 changed nothing" is why), and checking the attribute on
+a later frame instead of blocking is a change to `minimize()`'s contract and to
+`step.c`'s state, which is the spec author's call, not a task's. Flagged for
+the live try: if the hitch is objectionable, the cheap lever is the deadline,
+and the real fix is a later-frame check.
+
+**By-hand check (b), the live-conditions probe** (camera open, 45 preview
+frames shown, then `win_minimize` and `win_restore` through ctypes):
+
+```
+camera open, showing 45 frames
+win_minimize -> 0 (ok) in 611 ms
+target       -> 'Terminal' (win_target_name status -2)
+last AXError -> -25204
+win_restore  -> 0 (ok) in 527 ms
+```
+
+With the camera in use it still found a real window and not one of the Window
+Server's 10x18 pt camera-indicator windows: `win_is_candidate` holds for
+minimising as it does for resizing, which is the point of the two sharing one
+search. The `win_target_name` status of -2 is correct and documented - the name
+is filled in, but nothing is held, because a minimise keeps nothing. The
+`-25204` is the stale AXError from the busy read inside the settle wait, not a
+failure of this call; `win_last_ax_error` means "the most recent failing
+Accessibility call", and a successful `win_minimize` now contains one by design.
+
+The two timings above (611 ms, 527 ms) are the same measurement as the table,
+taken through the library in the live process, and they are what the 0.6 s
+figure in the paragraph above rests on.

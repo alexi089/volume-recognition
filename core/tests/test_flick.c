@@ -21,6 +21,7 @@
 #include "test.h"
 
 #include "fixtures.h"
+#include "palm_motion.h" /* hand_length, moved: shared with test_step.c */
 #include "pose.h"
 
 #define DT     (1.0 / 30.0)
@@ -81,26 +82,9 @@ static void frame(session *s, const gv_frame *hand)
     s->t += DT;
 }
 
-/* One hand-length, in frame heights. Every offset below is in THESE units,
- * whichever fixture is being moved, so that a motion means the same distance
- * when the hand changes shape half way through it. (The fist fixture's own
- * hand measures 6% smaller; nothing here turns on the difference.) */
-static float hand_length(void) { return gv_hand_scale(&fixture_real_open_palm, REAL); }
-
-/* The fixture, moved by dx hand-lengths right and dy hand-lengths down. */
-static gv_frame moved(const gv_frame *hand, float dx, float dy)
-{
-    gv_frame f = *hand;
-    float hl = hand_length();
-    for (int j = 0; j < GV_NUM_LANDMARKS; j++) {
-        /* Landmark x is a fraction of the WIDTH and y of the HEIGHT, while a
-         * hand-length (gv_hand_scale) is in frame heights. Dividing the x step
-         * by the aspect leaves both offsets the same physical length. */
-        f.lm[j].x += dx * hl / REAL;
-        f.lm[j].y += dy * hl;
-    }
-    return f;
-}
+/* Every offset below is in hand-lengths of the open palm, in frame heights:
+ * `hand_length` and `moved` (palm_motion.h) do that arithmetic, and test_step.c
+ * drives the same motion through the glue from the same two functions. */
 
 /* No hand in view. */
 static void vanish(session *s, double seconds)

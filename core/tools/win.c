@@ -4,6 +4,11 @@
  *   win get            print the front window's app, frame and screen
  *   win scale 0.9      resize it to 0.9x about its centre, wait a second, put it back
  *   win bench          60 small resizes and back, to time one win_apply call
+ *   win minimize       minimise it, wait a second, bring it back
+ *   win restore        bring back the window THIS process minimised - which, in a
+ *                      fresh run, is none: a minimised window is off the window
+ *                      list, so only the process that put it there can find it
+ *                      again. Here for the debugger, and for symmetry.
  *
  * Exists so the Accessibility code can be exercised, and stepped through in
  * the debugger, without the camera or Python anywhere in the picture. Run it
@@ -29,7 +34,7 @@ static int fail(const char *what, win_status s)
 
 static int usage(void)
 {
-    fputs("usage: win get | win scale <factor> | win bench\n", stderr);
+    fputs("usage: win get | win scale <factor> | win bench | win minimize | win restore\n", stderr);
     return 2;
 }
 
@@ -38,6 +43,36 @@ static void print_frame(const char *label)
     win_rect r;
     if (win_current_frame(&r) == WIN_OK)
         printf("%-10s %.0f x %.0f at %.0f, %.0f\n", label, r.w, r.h, r.x, r.y);
+}
+
+/* Minimise the front window, leave it in the Dock long enough for whoever ran
+ * this to see it happen, and put it back. Both statuses are printed: each one
+ * is what window.h read BACK off the window after waiting for it, and a
+ * minimise that reports success and does nothing is exactly what this is here
+ * to catch. Each call takes about 0.6 s of that waiting on its own, so the
+ * window is off the screen for a second and a half or so, not one second. */
+static int minimize_and_back(void)
+{
+    win_status s = win_minimize();
+    char name[128];
+    /* Filled in by the search inside win_minimize; the status is ignored on
+     * purpose, since no window is held for resizing (see window.h). */
+    win_target_name(name, sizeof name);
+    printf("target     %s\n", name);
+    printf("minimized  %s\n", win_strerror(s));
+
+    sleep(1);
+    /* The way back is tried even when the minimise complained: the complaint
+     * may be that the read-back could not confirm a window that has gone into
+     * the Dock all the same, and then this is the only thing that can bring it
+     * out. Leaving someone's window minimised is the worse outcome. */
+    win_status r = win_restore();
+    printf("restored   %s\n", win_strerror(r));
+    if (s != WIN_OK)
+        return fail("minimize", s);
+    if (r != WIN_OK)
+        return fail("restore", r);
+    return 0;
 }
 
 static double now_sec(void)
@@ -51,6 +86,19 @@ int main(int argc, char **argv)
 {
     if (argc < 2)
         return usage();
+
+    /* These two come first because neither wants the acquire below: win_minimize
+     * takes its own hold of the front window, and the window win_restore is
+     * after is in the Dock, where no search would find it. */
+    if (argc == 2 && strcmp(argv[1], "minimize") == 0)
+        return minimize_and_back();
+    if (argc == 2 && strcmp(argv[1], "restore") == 0) {
+        win_status r = win_restore();
+        if (r != WIN_OK)
+            return fail("restore", r);
+        printf("restored   ok\n");
+        return 0;
+    }
 
     win_status s = win_acquire();
     if (s != WIN_OK)

@@ -102,15 +102,43 @@ win_status win_acquire(void);
  * move at all when it should have is WIN_ERR_IGNORED. */
 win_status win_apply(float scale);
 
-/* Let go. Safe to call with nothing held. The window stays as it is. */
+/* Let go. Safe to call with nothing held. The window stays as it is. A window
+ * minimised by win_minimize is not let go: see win_restore. */
 void win_release(void);
+
+/* Minimise the front window - the same one win_acquire would take, by the same
+ * rule, except that a window whose size is fixed is minimised happily. Nothing
+ * is held afterwards, and nothing needs to be: unlike a resize, this is one
+ * write and the gesture is over.
+ *
+ * BLOCKS, typically for about 0.6 s and at most about a second. The write
+ * returns long before the window has gone anywhere, and this waits for the
+ * "minimized" attribute to say so, because a write that returns success and
+ * does nothing is the failure worth reporting (WIN_ERR_IGNORED). The reason
+ * the wait is that long, measured, is in window_macos.c.
+ *
+ * It does NOT disturb a resize in progress: win_acquire's window and this one
+ * are kept apart. */
+win_status win_minimize(void);
+
+/* Un-minimise the window win_minimize last minimised, and forget it. Blocks
+ * the same way, and for the same reason. The way
+ * back for the command-line tool and for a probe; no gesture calls it. A
+ * minimised window is gone from the screen and from the window list, so the
+ * only handle on it is the one win_minimize kept - which means this only ever
+ * works inside the same process, and only until the next win_minimize.
+ * WIN_ERR_NO_WINDOW if nothing was minimised (or it has already been restored). */
+win_status win_restore(void);
 
 /* The held window's frame as last read (after win_acquire or win_apply). */
 win_status win_current_frame(win_rect *out);
 
 /* The name of the application that owns the held window, NUL-terminated.
- * After a FAILED win_acquire it returns WIN_ERR_NO_WINDOW and still fills in
- * the app that was tried (empty if none was found), so the error can name it.
+ * The name is filled in by any attempt to take a window, win_acquire or
+ * win_minimize, and the status says only whether one is HELD: after a failed
+ * win_acquire, and after any win_minimize, it returns WIN_ERR_NO_WINDOW and
+ * still names the app that was tried (empty if none was found), which is what
+ * an error message - or a tool reporting what it just minimised - needs.
  * win_release clears it. */
 win_status win_target_name(char *buf, size_t len);
 

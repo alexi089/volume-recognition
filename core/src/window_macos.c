@@ -15,6 +15,12 @@
  * focused?" looks like the direct route and fails on this machine with
  * kAXErrorCannotComplete, -25204.)
  *
+ * Two things are done to that window, and both go through the same search
+ * (take_front_window): resizing, which holds the window for as long as the
+ * gesture lasts, and MINIMISING, which is one write and over. A minimised
+ * window drops out of the window list, so the only way back to it is the
+ * element win_minimize kept; that is what win_restore is for.
+ *
  * Memory: Core Foundation objects are reference counted by hand. The rule is
  * in the function names: anything from a function with Copy or Create in its
  * name is ours and must be CFRelease'd; anything from a Get is borrowed and
@@ -25,6 +31,7 @@
 #include <ApplicationServices/ApplicationServices.h>
 #include <math.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 /* An app that is busy (or hung) does not answer AX calls, and the default
@@ -32,7 +39,32 @@
  * a late resize is worth less than a frozen camera. */
 #define AX_TIMEOUT_SEC 0.25f
 
+/*
+ * Minimising is not finished when the write returns, and this is how long to
+ * wait for it before calling it a failure.
+ *
+ * Measured on this machine, on Terminal and on Slack: the write returns
+ * kAXErrorSuccess in well under a millisecond, the attribute read straight
+ * back still says false, the read 50 ms later TIMES OUT after the full
+ * AX_TIMEOUT_SEC (kAXErrorCannotComplete: the app is busy animating its window
+ * into the Dock and is not answering), and the attribute finally reads true
+ * about 0.57 s after the write. A single read-back, which is what a resize can
+ * afford, therefore reports every successful minimise as ignored - the first
+ * by-hand run of `win minimize` did exactly that on a window that had in fact
+ * minimised.
+ *
+ * So the read-back waits. One second is 1.75x the settling time measured, and
+ * the full second is only ever spent on a window that will not minimise at
+ * all. It IS a stall in the caller's thread, which for the live app is the
+ * camera loop: about 0.6 s of dropped frames on the frame a flick fires. That
+ * is the price of the status being true, and a flick fires at most once per
+ * flick_refractory_sec.
+ */
+#define MINIMIZE_SETTLE_SEC  1.0
+#define MINIMIZE_POLL_SEC    0.03
+
 static AXUIElementRef g_window;          /* the held window, or NULL; owned (retained) */
+static AXUIElementRef g_minimised;       /* what win_minimize last put in the Dock; owned */
 static win_rect       g_original;        /* its frame at win_acquire */
 static win_rect       g_current;         /* its frame as last read */
 static win_rect       g_visible;         /* the visible frame of its screen */
@@ -99,6 +131,60 @@ static AXError write_size(AXUIElementRef window, double w, double h)
     return e;
 }
 
+/* Read a yes/no attribute (kAXMinimized here) back after writing it. A write
+ * that returns success is not evidence that anything happened - CoreAudio
+ * taught this project that, and the window writes have shown it too. */
+static win_status read_bool(AXUIElementRef window, CFStringRef attribute, int *out)
+{
+    CFTypeRef value = NULL;
+    AXError e = AXUIElementCopyAttributeValue(window, attribute, &value);
+    if (e != kAXErrorSuccess || value == NULL) {
+        if (value)
+            CFRelease(value);
+        return ax_failed(e == kAXErrorSuccess ? kAXErrorNoValue : e);
+    }
+    /* CFBooleanGetValue on something that is not a CFBoolean is undefined, and
+     * what comes back is whatever the other application put there. */
+    win_status status = WIN_OK;
+    if (CFGetTypeID(value) != CFBooleanGetTypeID())
+        status = ax_failed(kAXErrorIllegalArgument);
+    else
+        *out = CFBooleanGetValue((CFBooleanRef)value) ? 1 : 0;
+    CFRelease(value);
+    return status;
+}
+
+static double now_sec(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts); /* monotonic: unaffected by the clock being set */
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+/* Wait for kAXMinimized to become `want` (1 minimised, 0 not), up to
+ * MINIMIZE_SETTLE_SEC. WIN_OK as soon as it does; WIN_ERR_IGNORED if the
+ * deadline passes and the window is still the other way - it took the write
+ * and did nothing, which some windows (panels, full-screen ones) do.
+ *
+ * A read that fails because the application is too busy to answer is "not
+ * yet", not a failure: that timeout IS what the minimise animation looks like
+ * from here. Any other Accessibility error is a real one and ends the wait. */
+static win_status wait_for_minimized(AXUIElementRef window, int want)
+{
+    const double deadline = now_sec() + MINIMIZE_SETTLE_SEC;
+    for (;;) {
+        int is = !want;
+        win_status status = read_bool(window, kAXMinimizedAttribute, &is);
+        if (status == WIN_OK && is == want)
+            return WIN_OK;
+        if (status != WIN_OK && g_last_ax_error != kAXErrorCannotComplete)
+            return status; /* read_bool put the AXError in g_last_ax_error */
+        if (now_sec() >= deadline)
+            return WIN_ERR_IGNORED;
+        usleep((useconds_t)(MINIMIZE_POLL_SEC * 1e6));
+    }
+}
+
 /* The display holding `centre`, minus its menu bar. The Dock is NOT taken off:
  * its window covers the whole display whatever the Dock's real size, so the
  * window list cannot say how big it is. A resized window can therefore end up
@@ -158,11 +244,32 @@ static int front_window_owner(CFArrayRef window_list, pid_t *pid_out)
     return 0;
 }
 
-/* --- window.h ------------------------------------------------------------ */
-
-win_status win_acquire(void)
+/*
+ * Take hold of the frontmost ordinary window that is not ours (which leaves
+ * out the camera preview): the part win_acquire and win_minimize share.
+ *
+ *   need_resizable  1 to refuse a window whose size cannot be set, with
+ *                   WIN_ERR_NOT_RESIZABLE. Resizing wants to find that out now
+ *                   rather than on the first pinch; minimising does not care -
+ *                   plenty of fixed-size windows minimise perfectly well.
+ *   *out            on WIN_OK, the window's AX element, RETAINED: it is the
+ *                   caller's, to release or to keep (win_acquire keeps it in
+ *                   g_window, win_minimize in g_minimised).
+ *   list_out        NULL, or somewhere to leave the on-screen window list that
+ *                   was searched - also retained, also the caller's to
+ *                   release. win_acquire needs that same list a second time,
+ *                   to find the menu bar of the display the window sits on;
+ *                   asking the Window Server twice would both cost a second
+ *                   call and let the two answers disagree.
+ *
+ * Nothing is left behind on failure: *out and *list_out are NULL, and
+ * g_owner_name holds the app that was tried, so an error can name it.
+ */
+static win_status take_front_window(int need_resizable, AXUIElementRef *out, CFArrayRef *list_out)
 {
-    win_release();
+    *out = NULL;
+    if (list_out)
+        *list_out = NULL;
 
     if (!AXIsProcessTrusted())
         return WIN_ERR_NOT_TRUSTED;
@@ -196,27 +303,20 @@ win_status win_acquire(void)
     }
     AXUIElementSetMessagingTimeout((AXUIElementRef)window, AX_TIMEOUT_SEC);
 
-    /* Found out now, not on the first pinch. */
-    Boolean settable = false;
-    e = AXUIElementIsAttributeSettable((AXUIElementRef)window, kAXSizeAttribute, &settable);
-    if (e != kAXErrorSuccess) {
-        status = ax_failed(e);
-        goto done;
-    }
-    if (!settable) {
-        status = WIN_ERR_NOT_RESIZABLE;
-        goto done;
+    if (need_resizable) {
+        Boolean settable = false;
+        e = AXUIElementIsAttributeSettable((AXUIElementRef)window, kAXSizeAttribute, &settable);
+        if (e != kAXErrorSuccess) {
+            status = ax_failed(e);
+            goto done;
+        }
+        if (!settable) {
+            status = WIN_ERR_NOT_RESIZABLE;
+            goto done;
+        }
     }
 
-    status = read_frame((AXUIElementRef)window, &g_original);
-    if (status != WIN_OK)
-        goto done;
-
-    g_current = g_original;
-    g_responded = 0;
-    CGPoint centre = { g_original.x + g_original.w / 2.0, g_original.y + g_original.h / 2.0 };
-    g_visible = visible_frame_at(centre, list);
-    g_window = (AXUIElementRef)window; /* keep it: ownership moves to g_window */
+    *out = (AXUIElementRef)window; /* ownership moves to the caller */
     window = NULL;
 
 done:
@@ -224,8 +324,38 @@ done:
      * return above would otherwise need its own copy of these releases. */
     if (window) CFRelease(window);
     if (app)    CFRelease(app);
+    if (status == WIN_OK && list_out)
+        *list_out = list; /* handed on, still retained */
+    else
+        CFRelease(list);
+    return status;
+}
+
+/* --- window.h ------------------------------------------------------------ */
+
+win_status win_acquire(void)
+{
+    win_release();
+
+    AXUIElementRef window = NULL;
+    CFArrayRef list = NULL;
+    win_status status = take_front_window(1, &window, &list);
+    if (status != WIN_OK)
+        return status; /* g_owner_name stays set on failure: the error should name the app */
+
+    status = read_frame(window, &g_original);
+    if (status == WIN_OK) {
+        g_current = g_original;
+        g_responded = 0;
+        CGPoint centre = { g_original.x + g_original.w / 2.0, g_original.y + g_original.h / 2.0 };
+        g_visible = visible_frame_at(centre, list);
+        g_window = window; /* keep it: ownership moves to g_window */
+        window = NULL;
+    }
+
+    if (window) CFRelease(window); /* the frame could not be read: nothing is held */
     CFRelease(list);
-    return status; /* g_owner_name stays set on failure: the error should name the app */
+    return status;
 }
 
 win_status win_apply(float scale)
@@ -267,11 +397,57 @@ win_status win_apply(float scale)
 
 void win_release(void)
 {
+    /* g_minimised is deliberately NOT touched: it belongs to win_minimize,
+     * which never holds a window for the glue to let go of, and the resize
+     * gesture ending has nothing to do with a window in the Dock. */
     if (g_window != NULL) {
         CFRelease(g_window);
         g_window = NULL;
     }
     g_owner_name[0] = '\0';
+}
+
+win_status win_minimize(void)
+{
+    AXUIElementRef window = NULL;
+    win_status status = take_front_window(0, &window, NULL);
+    if (status != WIN_OK)
+        return status;
+
+    AXError e = AXUIElementSetAttributeValue(window, kAXMinimizedAttribute, kCFBooleanTrue);
+    if (e != kAXErrorSuccess) {
+        CFRelease(window);
+        return ax_failed(e);
+    }
+
+    /* The write went through, so keep the element from here on, WHATEVER the
+     * read-back below then says. A minimised window is off the window list, so
+     * this is the only handle left on it - and the case where the read-back
+     * cannot confirm the window is exactly the case where someone needs a way
+     * to bring it back. */
+    if (g_minimised)
+        CFRelease(g_minimised);
+    g_minimised = window;
+
+    return wait_for_minimized(window, 1);
+}
+
+win_status win_restore(void)
+{
+    if (g_minimised == NULL)
+        return WIN_ERR_NO_WINDOW;
+
+    AXError e = AXUIElementSetAttributeValue(g_minimised, kAXMinimizedAttribute, kCFBooleanFalse);
+    /* Coming back out of the Dock is the same animation in reverse, and reads
+     * back just as slowly, so it waits the same way. */
+    win_status status = e != kAXErrorSuccess ? ax_failed(e) : wait_for_minimized(g_minimised, 0);
+
+    /* Let go whatever happened: one attempt at the way back is all this
+     * offers, and a window that refused to come out of the Dock is not worth
+     * holding a reference to. */
+    CFRelease(g_minimised);
+    g_minimised = NULL;
+    return status;
 }
 
 win_status win_current_frame(win_rect *out)
@@ -302,9 +478,9 @@ const char *win_strerror(win_status s)
     case WIN_OK:                return "ok";
     case WIN_ERR_NOT_TRUSTED:   return "not allowed to control windows: add the app that launched this "
                                        "(Terminal, VS Code, ...) under System Settings > Privacy & Security > Accessibility";
-    case WIN_ERR_NO_WINDOW:     return "no window to resize";
+    case WIN_ERR_NO_WINDOW:     return "no window to work on";
     case WIN_ERR_NOT_RESIZABLE: return "the front window has a fixed size";
-    case WIN_ERR_IGNORED:       return "the window accepted a new size and did not change (at its limit, or it ignores resizing)";
+    case WIN_ERR_IGNORED:       return "the window accepted the change and did not change (at its limit, or it ignores being resized or minimised)";
     case WIN_ERR_AX:            return "an Accessibility call failed";
     case WIN_ERR_BAD_VALUE:     return "bad value";
     }

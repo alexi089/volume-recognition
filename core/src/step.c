@@ -75,6 +75,15 @@ gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *ba
         ctx->step_window_held = 0; /* step_acquire_status is only read while active, and set afresh then */
     }
 
+    /*    Minimise: a flick fires on one frame and is over, so this is the
+     *    whole of it - no state to arm, nothing to hold, nothing to let go.
+     *    The backend finds the front window itself. Checking the kind as well
+     *    as `changed` matters here in a way it does not inside the resize
+     *    block above: this runs on every frame, including the ones where the
+     *    `changed` on the result belongs to a volume slide or a resize. */
+    if (r.out.kind == GV_KIND_MINIMIZE && r.out.changed)
+        r.win = window->minimize();
+
     return r;
 }
 

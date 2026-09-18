@@ -5,6 +5,7 @@
 #include "test.h"
 
 #include "fixtures.h"
+#include "palm_motion.h"  /* hand_length, moved: shared with test_flick.c */
 #include "pinch_motion.h"
 #include "pose.h"
 #include "step.h"
@@ -41,9 +42,11 @@ static vol_status fake_set(float v)
 /* The window fake records what was asked of it, in order. */
 static win_status fake_acquire_status;
 static win_status fake_apply_status;
+static win_status fake_minimize_status;
 static int        fake_acquire_calls;
 static int        fake_apply_calls;
 static int        fake_release_calls;
+static int        fake_minimize_calls;
 static float      fake_last_scale;
 static int        fake_applies_after_release; /* a write to a window already let go is a bug */
 static int        fake_window_held;
@@ -70,7 +73,24 @@ static void fake_release(void)
     fake_window_held = 0;
 }
 
-static const gv_backends fake_ops = { { fake_get, fake_set }, { fake_acquire, fake_apply, fake_release } };
+/* Minimising takes its own hold of a window inside the real backend, so this
+ * fake neither needs nor touches fake_window_held: a test that sees it called
+ * without an acquire is seeing the right thing. */
+static win_status fake_minimize(void)
+{
+    fake_minimize_calls++;
+    return fake_minimize_status;
+}
+
+static const gv_backends fake_ops = { { fake_get, fake_set },
+                                      { fake_acquire, fake_apply, fake_release, fake_minimize } };
+
+/* What the flick driver (step_frame, below) counts. Declared up here because
+ * fake_reset zeroes them, and in C a name has to exist before it is used. */
+static int        flicks;              /* frames whose output reported a minimise */
+static win_status flick_win;           /* the window status on the last such frame */
+static win_status win_after_flick;     /* ... and on the frame straight after it */
+static int        flick_on_last_frame;
 
 static void fake_reset(float volume)
 {
@@ -82,10 +102,18 @@ static void fake_reset(float volume)
     fake_last_set = -1.0f;
     fake_acquire_status = WIN_OK;
     fake_apply_status = WIN_OK;
-    fake_acquire_calls = fake_apply_calls = fake_release_calls = 0;
+    fake_minimize_status = WIN_OK;
+    fake_acquire_calls = fake_apply_calls = fake_release_calls = fake_minimize_calls = 0;
     fake_last_scale = -1.0f;
     fake_applies_after_release = 0;
     fake_window_held = 0;
+    /* What the driver below counts, zeroed here too: fake_reset is the first
+     * line of every test, so this is the one place that runs before all of
+     * them, whether the test builds its gv_ctx with start_real or by hand. */
+    flicks = 0;
+    flick_win = WIN_OK;
+    win_after_flick = WIN_OK;
+    flick_on_last_frame = 0;
 }
 
 /* --- driving frames ----------------------------------------------------- */
@@ -206,6 +234,16 @@ static void step_frame(gv_ctx *ctx, const gv_frame *hand)
         f = *hand;
     f.t_sec = now;
     last = gv_step(ctx, &f, &fake_ops);
+    /* A flick is over in one frame, so the frame it fired on is the only one
+     * that can carry its status - and the frame after it must be clean again.
+     * Both are gone by the time a test looks at `last`, so catch them here. */
+    if (flick_on_last_frame)
+        win_after_flick = last.win;
+    flick_on_last_frame = (last.out.kind == GV_KIND_MINIMIZE && last.out.changed);
+    if (flick_on_last_frame) {
+        flicks++;
+        flick_win = last.win;
+    }
     now += DT;
 }
 
@@ -268,6 +306,7 @@ static void a_changed_scale_is_written_to_the_window(void)
     CHECK_NEAR(fake_last_scale, last.out.scale, 1e-6); /* the latest scale, not a stale one */
     CHECK(last.out.scale < 0.9f);
     CHECK(fake_acquire_calls == 1);                    /* still the same window */
+    CHECK(fake_minimize_calls == 0);                   /* a changed scale is not a flick */
     gv_destroy(ctx);
 }
 
@@ -523,6 +562,67 @@ static void a_failing_write_is_reported_on_that_frame(void)
     gv_destroy(ctx);
 }
 
+/* --- the flick ----------------------------------------------------------- */
+
+/* The open palm, standing still `dy` hand-lengths below where it was recorded,
+ * for `seconds`. */
+static void step_palm_still(gv_ctx *ctx, float dy, double seconds)
+{
+    gv_frame f = moved(&fixture_real_open_palm, 0.0f, dy);
+    int n = (int)(seconds / DT + 0.5);
+    for (int i = 0; i < n; i++)
+        step_frame(ctx, &f);
+}
+
+/* The open palm falling `dy_hands` hand-lengths from `dy0`, in a straight line
+ * at a steady speed, over `seconds`: the gesture itself. The same motion as
+ * test_flick.c's `sweep`, built from the same palm_motion.h arithmetic, but
+ * driven through gv_step and the fake backends instead of gv_update. */
+static void step_palm_fall(gv_ctx *ctx, float dy0, float dy_hands, double seconds)
+{
+    int n = (int)(seconds / DT + 0.5);
+    for (int i = 1; i <= n; i++) {
+        gv_frame f = moved(&fixture_real_open_palm, 0.0f, dy0 + dy_hands * (float)i / (float)n);
+        step_frame(ctx, &f);
+    }
+}
+
+static void a_flick_minimises_the_front_window_once(void)
+{
+    fake_reset(0.40f);
+    gv_ctx *ctx = start_real();
+    step_palm_still(ctx, 0.0f, 0.3);
+    step_palm_fall(ctx, 0.0f, 2.0f, 0.25); /* two hand-lengths in a quarter second */
+    step_palm_still(ctx, 2.0f, 0.5);       /* and rests where it landed */
+
+    CHECK(flicks == 1);                    /* the core fired once ... */
+    CHECK(fake_minimize_calls == 1);       /* ... and the backend heard it once */
+    CHECK(fake_acquire_calls == 0);        /* minimising takes its own hold, inside the backend */
+    CHECK(fake_apply_calls == 0 && fake_release_calls == 0);
+    CHECK(flick_win == WIN_OK);
+    CHECK(fake_set_calls == 0);            /* a flick is not a volume change either */
+    gv_destroy(ctx);
+}
+
+/* A flick is over in one frame, so its status has exactly one frame to be seen
+ * on. Nothing is held afterwards for a later frame to keep complaining about,
+ * unlike a resize that could not take its window. */
+static void a_failed_minimise_is_reported_on_that_frame(void)
+{
+    fake_reset(0.40f);
+    fake_minimize_status = WIN_ERR_NOT_TRUSTED;
+    gv_ctx *ctx = start_real();
+    step_palm_still(ctx, 0.0f, 0.3);
+    step_palm_fall(ctx, 0.0f, 2.0f, 0.25);
+    step_palm_still(ctx, 2.0f, 0.5);
+
+    CHECK(flicks == 1 && fake_minimize_calls == 1);
+    CHECK(flick_win == WIN_ERR_NOT_TRUSTED); /* on the frame that fired ... */
+    CHECK(win_after_flick == WIN_OK);        /* ... and gone by the next one */
+    CHECK(last.win == WIN_OK);
+    gv_destroy(ctx);
+}
+
 static void a_volume_slide_never_touches_the_window(void)
 {
     fake_reset(0.30f);
@@ -531,6 +631,7 @@ static void a_volume_slide_never_touches_the_window(void)
     run(ctx, &fixture_victory, 0.0f, 1.5f, 1.0);
     CHECK(fake_set_calls > 0);
     CHECK(fake_acquire_calls == 0 && fake_apply_calls == 0 && fake_release_calls == 0);
+    CHECK(fake_minimize_calls == 0);
     CHECK(last.win == WIN_OK);
     gv_destroy(ctx);
 }
@@ -582,6 +683,8 @@ int main(void)
     RUN(a_second_gesture_takes_hold_of_its_own_window);
     RUN(a_window_that_cannot_be_taken_is_reported_and_left_alone);
     RUN(a_failing_write_is_reported_on_that_frame);
+    RUN(a_flick_minimises_the_front_window_once);
+    RUN(a_failed_minimise_is_reported_on_that_frame);
     RUN(a_volume_slide_never_touches_the_window);
     return TEST_SUMMARY();
 }
