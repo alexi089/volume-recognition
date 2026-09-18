@@ -515,3 +515,53 @@ names the right gesture now - a failed flick reads `WINDOW NOT MINIMISING`, not
 `leaks --atExit` reports 0 leaks on `core/build/win get` and, re-run on the
 current binary after the deferral rewrite, 0 leaks on `core/build/win minimize`
 as well (2214 nodes, 315 KB, footprint 5216K).
+
+### First live session of the redesign (2026-09-18, about 7 minutes, `traces/real_rate_first_session.*`, untracked)
+
+Run after Task 5 with Task 6 held (no minimise cue on the preview or HUD). The
+owner's verdict, verbatim: "minimize by flick doesnt work too well, and
+resizing works but well need to tune it to be more comfortable and better
+later." What the recording shows:
+
+**Resize by rate: the three measured problems are gone; comfort is not tuned.**
+- Frame rate while a window is written: 29.4 fps median (was 16.3). Idle 30.0.
+- Direction reversals between consecutive writes: 2% (was 15%): the jitter at
+  rest is gone.
+- 34 resize sessions, 1,406 writes, end scales from 0.10x to 6.42x; 8 of 34
+  ended within 5% of where they began. No pinch-first needed; range unlimited.
+- The dead zone, gain and cap are still the proxies from the design; "more
+  comfortable" is the owner's word for what Task 7's guided clips will tune.
+- **A false "did not change size" banner still appears on the FIRST write of
+  each Chrome resize** (83 frames, all Chrome): Chrome applies a size one frame
+  late, so the read-back after the first write sees the old size while the
+  window has not yet "responded". `win_write_was_ignored` needs the same
+  patience the minimise got: judge "ignored" only after a deadline (or a few
+  writes), not on the first read-back.
+
+**The flick: fired once in the whole session, correctly.**
+- At 125.6 s a flick fired, the write took (target Notes), `WIN_PENDING` for
+  0.6 s, then settled `WIN_OK`: the whole minimise path worked end to end, once.
+- Replaying the landmarks through the rule with each condition printed: 31
+  downward open-palm motions of at least 0.75 hand-lengths inside 0.35 s. Only
+  one passed every condition (126.98 s, and it sat inside the 1.5 s refractory
+  after the flick above). The rest were vetoed by, in order of frequency:
+  1. **Travel**: the owner's swipes measure 0.8 - 1.2 hand-lengths inside 0.35 s
+     against the 1.5 required. Over a 0.5 s window the same swipes measure
+     1.4 - 2.2 (three would pass); over 0.7 s, 1.8 - 3.0. But at 0.5 s one
+     corpus recording (`real_first_session`) fires falsely again, and at 0.7 s
+     one other (`real_fourth_session`) does. The positive side and the negative
+     side now overlap on travel-in-a-window alone.
+  2. **The size rule**: a real swipe down moves the hand away from the camera,
+     so its apparent size falls (ratios 0.66, 0.68, 0.51, 0.24 on real swipes).
+     The rule that removed the two corpus false positives (a hand dropping OUT
+     of the frame) also vetoes real swipes. The better discriminator is the
+     thing itself: whether the hand is leaving the picture (landmarks at or
+     below the bottom edge) rather than whether it changed size.
+  3. **The open-palm pose lost mid-swipe**: fast motion blurs the fingers and
+     the pose reads as not open on the newest sample (`open(old,new)=1,0`).
+     Requiring the open palm at the START of the span and only "not a fist" at
+     the end is the candidate.
+- Consequence for tuning: the flick cannot be tuned on travel and window alone
+  without false positives; it needs the leaving-the-frame veto in place of the
+  size rule, and then a labelled positive clip (`real_swipe_minimise`) against
+  the corpus. Task 7's guided clips are the way; nothing was changed tonight.
