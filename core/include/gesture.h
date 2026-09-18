@@ -58,11 +58,15 @@ typedef enum {
     GV_AXIS_Y    = 2  /* up is louder */
 } gv_axis;
 
-/* Which gesture is arming or armed. */
+/* Which gesture is arming or armed - or, for a one-shot, which one just fired. */
 typedef enum {
-    GV_KIND_NONE   = 0, /* idle */
-    GV_KIND_VOLUME = 1, /* index and middle up: a slider for the system volume */
-    GV_KIND_RESIZE = 2  /* thumb and index out: pinch to resize the front window */
+    GV_KIND_NONE     = 0, /* idle */
+    GV_KIND_VOLUME   = 1, /* index and middle up: a slider for the system volume */
+    GV_KIND_RESIZE   = 2, /* thumb and index out: pinch to resize the front window */
+    /* An open palm swiped down: minimise the front window. A one-shot - it
+     * never arms, so this kind appears on exactly one frame, with `changed`,
+     * and the state on that frame is still IDLE. */
+    GV_KIND_MINIMIZE = 3
 } gv_kind;
 
 /* New fields are added at the END: a field's offset is part of the contract
@@ -166,6 +170,26 @@ typedef struct {
      * about every other frame at 0.06 and 30 fps. See "Jitter and frame rate"
      * in the design doc. */
     float win_write_interval_sec;
+
+    /* The flick: an open palm swiped down, which minimises the front window.
+     * The POSE cannot carry this gesture - 46% of the talking-hands frames and
+     * 19% of the waving frames read as an open palm - so the motion does:
+     * inside flick_window_sec the palm centre must fall flick_travel
+     * hand-lengths, travelling sideways at most flick_max_sideways times as
+     * far, with the palm open at both ends of that span, no gap in tracking
+     * longer than release_grace_sec inside it, and the hand the same size at
+     * both ends - within gate_scale_min .. gate_scale_max, the gate above. That
+     * last condition has no constant of its own on purpose: it is the same
+     * "could this be one hand" test the armed gestures already trust, and it is
+     * what took the recordings to zero false flicks. */
+    float flick_travel;         /* hand-lengths the palm centre must fall ... */
+    float flick_window_sec;     /* ... and the span it has to fall them in    */
+    float flick_max_sideways;   /* sideways travel allowed, as a fraction of the fall */
+    /* Quiet time after the previous flick AND after any gesture let go. The
+     * second half matters most: lowering the hand at the end of a slide or a
+     * resize is itself a fast downward motion, often with the hand opening as
+     * it goes, and it must not minimise the window just adjusted. */
+    float flick_refractory_sec;
 } gv_config;
 
 /* The tuned defaults. Start from these and override single fields. */
@@ -185,7 +209,8 @@ typedef struct gv_ctx gv_ctx;
  * a negative time, dead-band, axis lock distance or pinch gap; a scale range
  * that does not contain 1.0, or a non-positive resize rate; an axis dominance below
  * 1; accel_speed_hi not above accel_speed_lo; an edge margin outside
- * [0, 0.5) or a negative edge rate; curl limits above the extend limits; or a scale gate that excludes 1.0)
+ * [0, 0.5) or a negative edge rate; curl limits above the extend limits; a scale gate that excludes 1.0;
+ * a non-positive flick travel or window, or a negative flick sideways allowance or refractory)
  * or if memory cannot be allocated. */
 gv_ctx *gv_create(const gv_config *cfg);
 

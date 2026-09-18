@@ -85,6 +85,13 @@ int main(int argc, char **argv)
     gv_ctx *ctx = NULL;
     gv_output out = { GV_IDLE, START_VOLUME, 0, GV_AXIS_NONE, GV_KIND_NONE, 1.0f };
     int frames = 0, armed_frames = 0, line_no = 0, status = 0;
+    /* Flicks (the minimise gesture) fired over the whole trace. Every recording
+     * on disk predates the gesture and contains no deliberate swipe down, so
+     * this number is the negative-corpus gate: it must read 0 on all of them.
+     * The times are printed too, because "which second did it fire in" is the
+     * first question when it does not. */
+    int flicks = 0;
+    double first_flick_t = 0.0, last_flick_t = 0.0;
     gv_replay_summary seen = { 0.0f, 0, 0, 1.0f };
     int resize_sessions = 0;
 
@@ -171,6 +178,12 @@ int main(int argc, char **argv)
             resize_prev_scale = out.scale;
             resize_writes++;
         }
+        if (out.changed && out.kind == GV_KIND_MINIMIZE) {
+            if (flicks == 0)
+                first_flick_t = frame.t_sec;
+            last_flick_t = frame.t_sec;
+            flicks++;
+        }
         if (out.state == GV_ARMED && prev_state != GV_ARMED && out.kind == GV_KIND_RESIZE)
             resize_sessions++;
 
@@ -227,6 +240,10 @@ int main(int argc, char **argv)
                seen.volume_changes, travel, biggest_step);
         printf("  resize: %d of those sessions, %d changes, final scale %.2f\n", resize_sessions,
                seen.resize_changes, seen.final_scale);
+        printf("  flicks: %d", flicks);
+        if (flicks > 0)
+            printf(" (first at %.1f s, last at %.1f s)", first_flick_t, last_flick_t);
+        printf("\n");
         printf("  resize: %d direction reversals between consecutive writes (%.0f%%)\n",
                resize_reversals,
                resize_step_pairs ? 100.0 * resize_reversals / resize_step_pairs : 0.0);

@@ -14,6 +14,10 @@
 
 #define GV_SCALE_HISTORY 32
 
+/* About half a second at 30 fps: comfortably longer than flick_window_sec, so
+ * the whole span a flick is judged over is always in the buffer. */
+#define GV_FLICK_HISTORY 16
+
 /* The longest frame gap the slew limit gives credit for: about three frames.
  * With max_slew = 2 that bounds any single step to 0.2 of the range. */
 #define GV_SLEW_MAX_CREDIT_SEC 0.1
@@ -70,6 +74,16 @@ struct gv_ctx {
     struct { double t; float scale; } scale_history[GV_SCALE_HISTORY];
     int    scale_history_next;
     int    scale_history_count;
+
+    /* The flick (gesture.c). A ring buffer like scale_history above: every
+     * usable frame's palm centre, hand size and open-palm verdict, so that the
+     * moment the machine is idle the last half second of motion is already
+     * there to judge. x and y are in frame heights (see pose.h), so dividing
+     * either by `scale` gives hand-lengths. */
+    struct { double t; float x, y, scale; int open; } flick_hist[GV_FLICK_HISTORY];
+    int    flick_next, flick_count;
+    double last_release_t;  /* when any gesture last let go (ARMING or ARMED -> IDLE) */
+    double last_flick_t;    /* when a flick last fired */
 
     gv_axis axis;           /* which way this slide runs; NONE until it is clear */
     float   axis_offset;    /* signed lock distance; travel is counted from there */

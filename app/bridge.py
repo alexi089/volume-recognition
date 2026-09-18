@@ -19,8 +19,9 @@ IDLE, ARMING, ARMED = 0, 1, 2
 STATE_NAMES = {IDLE: "idle", ARMING: "arming", ARMED: "armed"}
 AXIS_NONE, AXIS_X, AXIS_Y = 0, 1, 2
 AXIS_NAMES = {AXIS_NONE: None, AXIS_X: "x", AXIS_Y: "y"}
-KIND_NONE, KIND_VOLUME, KIND_RESIZE = 0, 1, 2
-KIND_NAMES = {KIND_NONE: None, KIND_VOLUME: "volume", KIND_RESIZE: "resize"}
+KIND_NONE, KIND_VOLUME, KIND_RESIZE, KIND_MINIMIZE = 0, 1, 2, 3
+KIND_NAMES = {KIND_NONE: None, KIND_VOLUME: "volume", KIND_RESIZE: "resize",
+              KIND_MINIMIZE: "minimize"}
 VOL_OK = 0
 WIN_OK = 0
 WIN_ERR_AX = -5
@@ -89,6 +90,10 @@ class Config(C.Structure):
         ("resize_dead_zone", C.c_float),
         ("resize_rate_gain", C.c_float),
         ("win_write_interval_sec", C.c_float),
+        ("flick_travel", C.c_float),
+        ("flick_window_sec", C.c_float),
+        ("flick_max_sideways", C.c_float),
+        ("flick_refractory_sec", C.c_float),
     ]
 
 

@@ -20,7 +20,7 @@ SAN     := -fsanitize=address,undefined -fno-omit-frame-pointer
 # (Found when verdict.c joined LIB_SRC and the library was not relinked.)
 HDRS    := $(wildcard include/*.h src/*.h tests/*.h) Makefile
 
-TESTS   := test_filter test_pose test_gesture test_resize test_step test_trace test_window_math test_verdict
+TESTS   := test_filter test_pose test_gesture test_resize test_flick test_step test_trace test_window_math test_verdict
 TEST_BINS := $(addprefix $(BUILD)/,$(TESTS))
 
 .PHONY: all test replay pinch-traces clean
@@ -49,6 +49,9 @@ $(BUILD)/test_gesture: tests/test_gesture.c $(CORE_SRC) $(HDRS) | $(BUILD)
 
 $(BUILD)/test_resize: tests/test_resize.c $(CORE_SRC) $(HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) tests/test_resize.c $(CORE_SRC) -lm -o $@
+
+$(BUILD)/test_flick: tests/test_flick.c $(CORE_SRC) $(HDRS) | $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) tests/test_flick.c $(CORE_SRC) -lm -o $@
 
 $(BUILD)/test_verdict: tests/test_verdict.c src/verdict.c $(HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) tests/test_verdict.c src/verdict.c -lm -o $@

@@ -78,9 +78,20 @@ A flick is a new class of gesture: it does not arm and hold, it **fires once**.
   centre moved DOWN by at least `flick_travel` (1.5 hand-lengths, vertical travel
   scaled by the aspect ratio as the slide does), with sideways travel at most
   `flick_max_sideways` (0.5) times the downward travel; the open palm is
-  present on the first and last frame of that span, and no frame in the span
-  is missing for longer than the release grace.
-- **When:** only from IDLE, and at least `flick_refractory_sec` (1.0) after the
+  present on the first and last frame of that span, no frame in the span
+  is missing for longer than the release grace, **and the hand is the same size
+  at both ends of the span - the ratio of the two `gv_hand_scale` readings
+  within `gate_scale_min .. gate_scale_max` (0.7 - 1.4), the existing
+  plausibility gate, reused rather than given a constant of its own.** That last
+  condition was added after measurement, not designed in: it is what took the
+  negative corpus to zero (see Findings). A hand dropping out of the bottom of
+  the frame changes apparent size as it goes - the worst case in the recordings
+  grew 1.71x in a third of a second - while a hand swiped across the picture
+  keeps its size; and `flick_travel` is counted in hand-lengths, a unit that
+  means nothing when the hand was not the same size at each end.
+- **When:** only from IDLE, and at least `flick_refractory_sec` (1.5 - measured;
+  with the motion rule alone the last non-gesture sweep in the recordings lands
+  1.10 s after a release, and the original 1.0 let it through) after the
   previous flick AND after the previous release of any gesture. The second
   condition is deliberate: lowering the hand after a volume slide or a resize
   is a fast downward motion, often with the hand opening, and it must not
@@ -97,9 +108,22 @@ Risk, stated plainly: every recorded session holds dozens of hand-lowering
 motions after a release, and the waving clip holds open palms sweeping past the
 camera. Those recordings are the negative corpus for the flick, and the rule is
 tuned against them BEFORE the first live try: zero flicks on all of them is the
-bar. The refractory after release is the first line of defence; if the corpus
-still fires, the candidates are a longer refractory, a larger travel, or
-requiring the palm to face the camera.
+bar. The refractory after release is the first line of defence, and on the
+evidence it does most of the work: with it switched off the motion rule fires
+on twelve frames across the corpus, ten of them within 0.30 s of a release.
+
+What was then actually found, when the rule was built and run (Findings below),
+is that the three candidates this section first named could NOT reach zero. A
+longer refractory could not: one of the two survivors was 3.15 s after any
+release. A larger travel could not at any defensible value: that survivor scored
+2.67 hand-lengths, so the threshold would have had to sit about 1% above a known
+negative. Requiring the palm to face the camera could not even be evaluated:
+twelve of the eighteen recordings, including both failing ones, predate the
+handedness column and read handedness 0, so such a rule would have turned the
+corpus green for want of metadata rather than by discriminating. What did work
+is the size-stability condition in the Motion bullet above - one hand at both
+ends of the span - which takes the corpus to zero with the worst remaining false
+motion at 1.28 hand-lengths against the 1.5 threshold.
 
 ## What must not change
 
@@ -199,3 +223,166 @@ reading higher than waving was not anticipated going in (an open, gesturing
 hand while talking apparently holds this shape more than a waving hand does,
 which is often mid-motion, not fully splayed) - worth remembering when tuning
 the flick's negative corpus in the next task.
+
+### Task 4 (the flick): the negative corpus says the rule as specified is not ready
+
+The flick is built exactly as this spec describes it - open palm at both ends
+of a `flick_window_sec` span, `flick_travel` hand-lengths down, sideways at
+most `flick_max_sideways` of the fall, no tracking gap longer than the release
+grace inside the span, only from IDLE and only `flick_refractory_sec` after the
+previous flick and after any release. Unit tests: 27 checks, green, nine
+mutants killed. **It does not pass its own acceptance bar.** Run over all
+eighteen recordings on disk - none of which contains a deliberate swipe down -
+it fires twice:
+
+| recording | frames | hand frames | flicks (defaults 1.5 / 0.35 / 0.5 / 1.0) |
+| --- | --- | --- | --- |
+| `traces/take1/real_cup_reach.csv` | 1,179 | 1,111 | 0 |
+| `traces/take1/real_nose_scratch.csv` | 1,180 | 1,151 | 0 |
+| `traces/take1/real_slide_down.csv` | 1,170 | 1,114 | 0 |
+| **`traces/take1/real_slide_up.csv`** | 1,192 | 839 | **1** (at 23.20 s) |
+| `traces/take1/real_talking_hands.csv` | 1,181 | 866 | 0 |
+| `traces/take1/real_typing.csv` | 1,178 | 101 | 0 |
+| `traces/take1/real_waving.csv` | 1,190 | 1,019 | 0 |
+| **`traces/real_first_session.csv`** | 9,556 | 5,234 | **1** (at 223.79 s) |
+| `traces/real_second_session.csv` | 11,330 | 6,445 | 0 |
+| `traces/real_third_session.csv` | 6,819 | 2,666 | 0 |
+| `traces/real_fourth_session.csv` | 6,298 | 3,507 | 0 |
+| `traces/real_fifth_session.csv` | 6,021 | 2,100 | 0 |
+| `traces/real_resize_first_session.csv` | 652 | 385 | 0 |
+| `traces/real_resize_second_session.csv` | 12,575 | 8,431 | 0 |
+| `traces/probe_pinch_move.csv` | 299 | 299 | 0 |
+| `traces/probe_pinch_open.csv` | 300 | 300 | 0 |
+| `traces/probe_pointing.csv` | 300 | 300 | 0 |
+| `traces/probe_volume_pose.csv` | 299 | 299 | 0 |
+
+**The refractory is already doing most of the work.** With the refractory
+switched off, the motion rule alone fires on twelve frames across the corpus;
+ten of those are within 0.30 s of a release, which the 1.0 s refractory
+catches. The two that get through are 3.15 s (slide_up) and 1.10 s
+(first_session) after the last release. Both are the same event in kind: the
+hand dropping out of the bottom of the frame at the end of a clip.
+
+What the hand actually did, frame by frame (`core/build/replay` prints the
+times; the geometry below is `gv_palm_*` on the raw rows):
+
+- `real_slide_up.csv`, 22.87 s - 23.23 s: the palm centre falls from y 0.659 to
+  0.917 while the hand's apparent size grows from 0.100 to 0.172 frame heights
+  (**1.71x in a third of a second**) and then vanishes from the frame. Measured
+  in hand-lengths of the span's FIRST frame - the smallest of them - that is a
+  fall of 2.67, comfortably past any travel threshold. The open-palm reading
+  also flickers: open at both ends of the span, not open for the ten frames
+  between.
+- `real_first_session.csv`, 223.46 s - 223.79 s: palm y 0.633 to 0.794, hand
+  size 0.095 to 0.111 (1.18x), then gone. A fall of 1.70 hand-lengths, with
+  sideways travel of 0.80 - just inside the 0.5 x 1.70 = 0.85 allowance.
+
+**The three tuning candidates this spec names cannot close it.**
+
+1. *A longer refractory after release.* 1.5 s clears first_session (1.10 s) and
+   costs little. slide_up is 3.15 s after the last release; no defensible
+   refractory reaches it, and a 3 s one would not generalise anyway - a hand
+   entering and leaving the frame needs no gesture before it.
+2. *A larger travel.* slide_up scores 2.67 hand-lengths, so travel would have
+   to be 2.7 - about 1% of margin over a known negative, and above the 2.0 fall
+   the unit tests use for the real gesture. Fitting a constant to one event.
+3. *The palm facing the camera.* **Not evaluable on this corpus.** The
+   handedness column was added to the trace format after most recordings were
+   made, and neither failing file has it: twelve of the eighteen recordings,
+   including `real_slide_up.csv` and `real_first_session.csv`, carry no hand
+   label at all, so every replayed frame reads handedness 0. A rule of the form
+   `gv_palm_turn x handedness` would reject every frame of those two files and
+   the corpus would go green **for want of metadata, not because the rule
+   discriminates**. That is a false pass and is worse than the current failure.
+
+**What does work, measured.** Two extra vetoes were each tried against the full
+corpus (worst remaining false motion, in hand-lengths, against the 1.5
+threshold):
+
+| rule | refractory 1.0 s | refractory 1.5 s |
+| --- | --- | --- |
+| as specified | 2.67 (fires 2x) | 2.67 (fires 1x) |
+| A: open palm on EVERY frame of the span | 1.70 (fires 1x) | **1.28 (fires 0x)** |
+| B: hand size across the span within the existing scale gate | 1.70 (fires 1x) | **1.28 (fires 0x)** |
+
+Either A or B, with the refractory at 1.5 s, gives zero flicks with the worst
+false motion in the whole corpus at 1.28 hand-lengths - a 17% margin under the
+1.5 default, rather than a fitted constant.
+
+What each would cost the real gesture, over the 2,968 spans in the corpus whose
+two ends are an open palm: rule A vetoes 19% of them, rule B 8%. **B is the
+better of the two.** It is also the more principled: `flick_travel` is measured
+in "hand-lengths", and across these spans the hand's apparent size ranges from
+0.07x to 13.56x, so on a glitchy span that unit means nothing. The state
+machine already has a name and a measured constant for "could this be the same
+hand" - `gate_scale_min` / `gate_scale_max` (0.7 - 1.4), used by
+`frame_is_plausible` on every armed frame - and B is that same test applied
+across the flick's span. It makes the travel unit well defined rather than
+adding a new idea.
+
+**Not adopted, deliberately.** B is a change to the rule this spec defines, not
+a retune of one of its constants, and the 8% it vetoes cannot be checked
+against a genuine flick until one is recorded - there is still no positive
+flick clip. That is a design call for the spec's author, not a tuning step. The
+gesture is therefore built and tested but **must not be enabled live as it
+stands**: on this evidence it would minimise a window roughly once per
+twenty minutes of ordinary hand movement, for nothing.
+
+### Task 4, after the fix: the corpus is at zero
+
+The controller's ruling was to adopt the measured fix. Two changes from the
+table above: the flick's span must show one hand - the `gv_hand_scale` ratio
+between the span's oldest and newest samples within `gate_scale_min ..
+gate_scale_max` (0.7 - 1.4), reusing the existing plausibility gate rather than
+adding a constant - and `flick_refractory_sec` moves from 1.0 to 1.5. Nothing
+else moved: travel stays 1.5, window 0.35, sideways 0.5. No palm-facing rule.
+
+The ratio is compared **oldest sample to newest sample**, not every consecutive
+pair; that is what was measured, and it is the same shape as the gate it reuses
+(`frame_is_plausible` compares one frame with the last believed one).
+
+| recording | frames | hand frames | flicks BEFORE | flicks AFTER |
+| --- | --- | --- | --- | --- |
+| `traces/take1/real_cup_reach.csv` | 1,179 | 1,111 | 0 | 0 |
+| `traces/take1/real_nose_scratch.csv` | 1,180 | 1,151 | 0 | 0 |
+| `traces/take1/real_slide_down.csv` | 1,170 | 1,114 | 0 | 0 |
+| `traces/take1/real_slide_up.csv` | 1,192 | 839 | 1 (23.20 s) | **0** |
+| `traces/take1/real_talking_hands.csv` | 1,181 | 866 | 0 | 0 |
+| `traces/take1/real_typing.csv` | 1,178 | 101 | 0 | 0 |
+| `traces/take1/real_waving.csv` | 1,190 | 1,019 | 0 | 0 |
+| `traces/real_first_session.csv` | 9,556 | 5,234 | 1 (223.79 s) | **0** |
+| `traces/real_second_session.csv` | 11,330 | 6,445 | 0 | 0 |
+| `traces/real_third_session.csv` | 6,819 | 2,666 | 0 | 0 |
+| `traces/real_fourth_session.csv` | 6,298 | 3,507 | 0 | 0 |
+| `traces/real_fifth_session.csv` | 6,021 | 2,100 | 0 | 0 |
+| `traces/real_resize_first_session.csv` | 652 | 385 | 0 | 0 |
+| `traces/real_resize_second_session.csv` | 12,575 | 8,431 | 0 | 0 |
+| `traces/probe_pinch_move.csv` | 299 | 299 | 0 | 0 |
+| `traces/probe_pinch_open.csv` | 300 | 300 | 0 | 0 |
+| `traces/probe_pointing.csv` | 300 | 300 | 0 | 0 |
+| `traces/probe_volume_pose.csv` | 299 | 299 | 0 | 0 |
+| **total** | **62,719** | **36,167** | **2** | **0** |
+
+**The margin, not just the count.** Scoring every idle frame that passes the
+pose, gap, sideways and size tests, the strongest downward motion left anywhere
+in the corpus is **1.28 hand-lengths**, against a `flick_travel` of **1.5** - a
+17% margin, and one that comes from the rule rather than from a constant fitted
+to the failures. The next four are 1.27, 1.23, 1.05 and 1.00. Both changes are
+load-bearing: put the refractory back to 1.0 and `real_first_session.csv` fires
+again at 223.79 s (scoring 1.70); drop the size check and `real_slide_up.csv`
+fires again at 23.20 s (2.67).
+
+**What it costs the real gesture.** Over the 2,968 spans in the corpus whose two
+ends are an open palm, the size condition vetoes **8%** - every one of them a
+span where the hand's apparent size changed by more than 1.4x or less than 0.7x
+in a third of a second. (The alternative measured, requiring the open palm on
+every frame of the span rather than at its ends, reaches the same zero but
+vetoes 19%, so it was not taken.)
+
+**Said plainly: the positive side is still unmeasured.** There is no recording
+of a deliberate swipe down, so every number above is about what the flick does
+NOT do. Whether 1.5 hand-lengths in 0.35 s is a comfortable motion to perform,
+and whether that 8% ever eats a real flick, are open questions until a guided
+clip exists - Task 7. `flick_travel`, `flick_window_sec` and
+`flick_max_sideways` remain proxies from this spec; only the refractory and the
+size condition are measured, and they are measured against negatives only.

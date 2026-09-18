@@ -222,6 +222,14 @@ static void nonsense_config_is_rejected(void)
     c = gv_default_config(); c.filter_min_cutoff = 0.0f;   CHECK(gv_create(&c) == NULL);
     c = gv_default_config(); c.filter_d_cutoff = 0.0f;     CHECK(gv_create(&c) == NULL);
     c = gv_default_config(); c.filter_beta = -1.0f;        CHECK(gv_create(&c) == NULL);
+    /* a flick with no travel to make, or no window to make it in, fires on anything */
+    c = gv_default_config(); c.flick_travel = 0.0f;        CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.flick_travel = NAN;         CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.flick_window_sec = 0.0f;    CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.flick_max_sideways = -0.1f; CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.flick_max_sideways = INFINITY; CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.flick_refractory_sec = -0.1f;  CHECK(gv_create(&c) == NULL);
+    c = gv_default_config(); c.flick_refractory_sec = NAN;    CHECK(gv_create(&c) == NULL);
 
     /* a negative gain is legitimate: it reverses the slider's direction */
     c = gv_default_config(); c.gain = -c.gain; c.gain_fast = -c.gain_fast;
