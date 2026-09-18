@@ -255,12 +255,17 @@ static void the_rolled_back_scale_is_written_before_the_window_is_let_go(void)
 {
     fake_reset(0.40f);
     gv_ctx *ctx = start_real();
-    step_pinch(ctx, 0.0f, 0.0f, 0.5);
-    step_pinch(ctx, 0.0f, 0.2f, 0.5);
-    step_pinch(ctx, 0.2f, 0.2f, 0.6);
+    step_pinch(ctx, 0.0f, 0.0f, 0.5);  /* arm at neutral */
+    step_pinch(ctx, 0.0f, 0.3f, 0.6);  /* move off-centre briefly by rate ... */
+    step_pinch(ctx, 0.3f, 0.0f, 0.15); /* ... back toward neutral ... */
+    step_pinch(ctx, 0.0f, 0.0f, 0.6);  /* ... and held still: the size settles, under rate
+                                        * control unlike the old ratio law, held OFF-centre
+                                        * never settles - it keeps moving for as long as it
+                                        * is held, so "set" below has to be captured at
+                                        * neutral, not mid-pinch. */
     float set = last.out.scale;
 
-    gv_frame from = pinch(0.2f), fist = aligned_to(&fixture_real_fist, &fixture_real_pinch_open);
+    gv_frame from = pinch(0.0f), fist = aligned_to(&fixture_real_fist, &fixture_real_pinch_open);
     float lowest_written = set;
     for (int i = 1; i <= 21; i++) { /* 0.2 s closing into the recorded fist, then held */
         float k = i <= 6 ? (float)i / 6.0f : 1.0f;
