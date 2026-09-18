@@ -338,10 +338,17 @@ static void window_writes_are_throttled_but_nothing_is_lost(void)
     CHECK(writes >= 14 && writes <= 16); /* every other frame, not every frame */
     /* The write cadence (every other frame, starting the frame the gesture's
      * first change fires) does not necessarily land ON the very last of these
-     * 30 frames; one more frame at the same offset - still moving, since a
-     * held offset never settles under rate control - is what the interval
-     * allows next, and it is not counted in `writes` above. */
-    step_pinch(ctx, k, k, DT);
+     * 30 frames: whichever of the two frames after any pending change is the
+     * due one depends on a parity this test does not control (which frame,
+     * within the 30, first crossed the dead zone). win_write_interval_sec /
+     * DT = 0.06 / (1/30) = 1.8, so at most ceil(1.8) = 2 more frames are ever
+     * needed before a pending change is due - not 1, which would only pass by
+     * coincidence of that parity. Settling at the arming gap (not holding k)
+     * both bounds it at exactly 2 frames (further held-offset motion would
+     * keep generating new, later changes of its own, chasing the same
+     * problem one frame down) and, once flushed, stays flushed: neutral
+     * generates no further change for either settle frame to race against. */
+    step_pinch(ctx, 0.0f, 0.0f, 2 * DT);
     CHECK_NEAR(fake_last_scale, last.out.scale, 1e-6); /* the latest value, never a stale one */
     CHECK(fake_applies_after_release == 0);
     gv_destroy(ctx);
