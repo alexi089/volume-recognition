@@ -15,7 +15,10 @@
 #define GV_SCALE_HISTORY 32
 
 /* About half a second at 30 fps: comfortably longer than flick_window_sec, so
- * the whole span a flick is judged over is always in the buffer. */
+ * the whole span a flick is judged over is always in the buffer. Above about
+ * 45 fps (16 frames inside 0.35 s) it no longer is, and the span truncates to
+ * whatever the buffer holds - which can only SHRINK the fall measured across
+ * it, so the gesture then fails towards not firing, never towards firing. */
 #define GV_FLICK_HISTORY 16
 
 /* The longest frame gap the slew limit gives credit for: about three frames.

@@ -75,13 +75,14 @@ A flick is a new class of gesture: it does not arm and hold, it **fires once**.
   out (`gv_pose_is_open_palm`, new, measured on `fixture_real_open_palm` and
   the open-palm frames of the recordings).
 - **Motion:** over the last `flick_window_sec` (0.35 s) of frames, the palm
-  centre moved DOWN by at least `flick_travel` (1.5 hand-lengths, vertical travel
-  scaled by the aspect ratio as the slide does), with sideways travel at most
-  `flick_max_sideways` (0.5) times the downward travel; the open palm is
-  present on the first and last frame of that span, no frame in the span
-  is missing for longer than the release grace, **and the hand is the same size
-  at both ends of the span - the ratio of the two `gv_hand_scale` readings
-  within `gate_scale_min .. gate_scale_max` (0.7 - 1.4), the existing
+  centre moved DOWN by at least `flick_travel` (1.5 hand-lengths in frame-height
+  units; no extra aspect factor - `gv_palm_x` already carries it and `gv_palm_y`
+  does not need it), with sideways travel at most `flick_max_sideways` (0.5)
+  times the downward travel; the open palm is present on the first and last
+  frame of that span, no frame in the span is missing for longer than the
+  release grace, **and the hand is the same size at both ends of the span - the
+  ratio of the two `gv_hand_scale` readings within
+  `gate_scale_min .. gate_scale_max` (0.7 - 1.4), the existing
   plausibility gate, reused rather than given a constant of its own.** That last
   condition was added after measurement, not designed in: it is what took the
   negative corpus to zero (see Findings). A hand dropping out of the bottom of
@@ -225,6 +226,8 @@ which is often mid-motion, not fully splayed) - worth remembering when tuning
 the flick's negative corpus in the next task.
 
 ### Task 4 (the flick): the negative corpus says the rule as specified is not ready
+
+*Superseded by the section after it; kept for the record.*
 
 The flick is built exactly as this spec describes it - open palm at both ends
 of a `flick_window_sec` span, `flick_travel` hand-lengths down, sideways at
