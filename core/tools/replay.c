@@ -86,10 +86,12 @@ int main(int argc, char **argv)
     gv_output out = { GV_IDLE, START_VOLUME, 0, GV_AXIS_NONE, GV_KIND_NONE, 1.0f };
     int frames = 0, armed_frames = 0, line_no = 0, status = 0;
     /* Flicks (the minimise gesture) fired over the whole trace. Every recording
-     * on disk predates the gesture and contains no deliberate swipe down, so
-     * this number is the negative-corpus gate: it must read 0 on all of them.
-     * The times are printed too, because "which second did it fire in" is the
-     * first question when it does not. */
+     * on disk predates the gesture: none contains a deliberate open palm held
+     * still and then dropped, so this number is the negative-corpus gate and
+     * must read 0 on all of them. That includes the session recorded while an
+     * earlier, hold-less version of the gesture was live - it holds attempts at
+     * THAT gesture, not this one. The times are printed too, because "which
+     * second did it fire in" is the first question when it does not. */
     int flicks = 0;
     double first_flick_t = 0.0, last_flick_t = 0.0;
     gv_replay_summary seen = { 0.0f, 0, 0, 1.0f };

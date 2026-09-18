@@ -128,10 +128,34 @@ float gv_palm_y(const gv_frame *f);
  * This is a POSE ONLY. Like the arm and stay poses above, it says what shape
  * the hand is, never what to do about it: a hand can sit open in front of the
  * camera for as long as it likes (the waving and talking-hands recordings do
- * this constantly) without anything firing. It is the precondition a flick
- * gesture (a fast downward swipe of an open palm, see the design spec) checks
- * before it also asks about motion; on its own it must never arm, stay, or
- * change anything. */
+ * this constantly) without anything firing. It is what the flick's HOLD is made
+ * of - an open palm kept still, which must then be dropped before anything
+ * happens (see the design spec); on its own it must never arm, stay, or change
+ * anything. */
 int gv_pose_is_open_palm(const gv_frame *f, float aspect, const gv_pose_limits *lim);
+
+/* All four fingers confidently CURLED (gv_finger_is_curled judges each one):
+ * a closed hand. The thumb is not consulted, so a full pinch counts as one
+ * too - the two are nearly the same shape in 2D, and nothing that asks this
+ * question cares which it is looking at.
+ *
+ * It is not the negation of gv_pose_is_open_palm, and that is the whole point.
+ * Between the two lies the band where fast motion puts a hand: a fast drop
+ * blurs the fingers and they stop reading as "long AND straight" without ever
+ * reading as short or bent. The flick wants a confident open palm through its
+ * HOLD and only "not closed" at the end of the DROP, because seven of the
+ * sixteen downward open-palm motions in the first live session had lost the
+ * open palm by their last sample, and only two of those had closed the hand. */
+int gv_pose_is_fist(const gv_frame *f, float aspect, const gv_pose_limits *lim);
+
+/* How far down the picture the hand reaches: the LARGEST y of any landmark,
+ * y being a fraction of the frame height that grows downwards. Not the palm
+ * centre and not one chosen landmark, because which part of the hand leaves
+ * the bottom of the frame first depends on how it is held.
+ *
+ * MediaPipe keeps reporting landmarks for a hand that is partly out of the
+ * picture, with coordinates outside 0..1, so a reading above 1.0 means the
+ * hand is already over the edge rather than pressed against it. */
+float gv_hand_lowest_y(const gv_frame *f);
 
 #endif /* GV_POSE_H */

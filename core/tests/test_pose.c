@@ -431,6 +431,78 @@ static void absent_hand_is_never_an_open_palm(void)
     CHECK(!gv_pose_is_open_palm(&f, REAL, &LIM));
 }
 
+/* --- the closed hand, and how far down the picture a hand reaches -------- */
+
+/* The flick asks two questions of the END of a swipe, and they are separate
+ * measurements from the open palm at its start: is the hand CLOSED (a fist
+ * ends the gesture), and is it still fully in the picture. */
+
+static void a_fist_and_a_full_pinch_read_as_a_fist(void)
+{
+    CHECK(gv_pose_is_fist(&fixture_real_fist, REAL, &LIM));
+    /* A closed pinch is a fist by this measure, and that is correct rather
+     * than a near miss: all four fingers are curled and only the thumb tells
+     * the two apart (see gv_pose_can_stay_resize, which needs the index for
+     * exactly this reason). The flick has nothing to say about either. */
+    CHECK(gv_pose_is_fist(&fixture_real_pinch_closed, REAL, &LIM));
+}
+
+/* "Not a fist" has to be TRUE for every hand that is not closed, including the
+ * ones in the ambiguous band, because it is what the flick asks of a swipe's
+ * last frame: fast motion blurs the fingers, and an open palm halfway to
+ * unreadable must still end a flick. */
+static void an_open_or_half_open_hand_is_not_a_fist(void)
+{
+    CHECK(!gv_pose_is_fist(&fixture_real_open_palm, REAL, &LIM));
+    CHECK(!gv_pose_is_fist(&fixture_real_tight_two, REAL, &LIM));
+    CHECK(!gv_pose_is_fist(&fixture_real_relaxed_two, REAL, &LIM));
+    CHECK(!gv_pose_is_fist(&fixture_real_pinch_open, REAL, &LIM));
+}
+
+/* All four, not any: one finger curled inside an otherwise open hand is a hand
+ * with one finger curled, and a flick that ends that way is still a flick. */
+static void one_curled_finger_is_not_a_fist(void)
+{
+    gv_frame index_down = with_finger_folded(&fixture_real_open_palm, GV_INDEX_MCP);
+    CHECK(gv_finger_is_curled(&index_down, GV_FINGER_INDEX, REAL, &LIM));
+    CHECK(!gv_finger_is_curled(&index_down, GV_FINGER_PINKY, REAL, &LIM));
+    CHECK(!gv_pose_is_fist(&index_down, REAL, &LIM));
+}
+
+/* Same guard as every other pose-level function here. */
+static void absent_hand_is_never_a_fist(void)
+{
+    gv_frame f = fixture_real_fist;
+    f.present = 0;
+    CHECK(!gv_pose_is_fist(&f, REAL, &LIM));
+}
+
+/* The lowest point of the hand in the picture: the LARGEST y of any landmark,
+ * because image y grows downwards. Not the palm centre and not the wrist - a
+ * hand leaving the bottom of the frame leaves fingers-first or wrist-first
+ * depending on how it is held, and whichever part goes first is the one that
+ * says the hand is on its way out. */
+static void the_lowest_landmark_is_the_furthest_down_the_hand_reaches(void)
+{
+    float low = gv_hand_lowest_y(&fixture_real_open_palm);
+    for (int i = 0; i < GV_NUM_LANDMARKS; i++)
+        CHECK(fixture_real_open_palm.lm[i].y <= low + 1e-6f);
+    CHECK(low > gv_palm_y(&fixture_real_open_palm)); /* below the palm centre */
+}
+
+/* MediaPipe reports landmarks outside 0..1 for a hand that is partly out of
+ * the picture, so "past the bottom edge" is a reading above 1.0 and not a
+ * value clamped at it. Moving the fixture down moves the reading with it. */
+static void a_hand_pushed_past_the_bottom_edge_reads_above_one(void)
+{
+    gv_frame f = fixture_real_open_palm;
+    float before = gv_hand_lowest_y(&f);
+    for (int i = 0; i < GV_NUM_LANDMARKS; i++)
+        f.lm[i].y += 0.25f;
+    CHECK_NEAR(gv_hand_lowest_y(&f), before + 0.25f, 1e-6);
+    CHECK(gv_hand_lowest_y(&f) > 1.0f);
+}
+
 /* --- which way the palm faces ------------------------------------------- */
 
 static void palm_turn_is_a_size_free_rotation_free_number(void)
@@ -539,6 +611,12 @@ int main(void)
     RUN(a_bent_thumb_is_not_an_open_palm);
     RUN(mirroring_an_open_palm_is_still_an_open_palm);
     RUN(absent_hand_is_never_an_open_palm);
+    RUN(a_fist_and_a_full_pinch_read_as_a_fist);
+    RUN(an_open_or_half_open_hand_is_not_a_fist);
+    RUN(one_curled_finger_is_not_a_fist);
+    RUN(absent_hand_is_never_a_fist);
+    RUN(the_lowest_landmark_is_the_furthest_down_the_hand_reaches);
+    RUN(a_hand_pushed_past_the_bottom_edge_reads_above_one);
     RUN(palm_turn_is_a_size_free_rotation_free_number);
     RUN(turning_the_hand_over_flips_the_sign);
     RUN(hand_scale_matches_measured_value);

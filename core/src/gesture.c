@@ -6,12 +6,13 @@
  *   ARMED   the gesture is live; its definition turns each believed frame into
  *           a value (gestures/volume.c: a volume; more to come).
  *
- * One gesture does not go through any of that. The FLICK - an open palm swiped
- * down, which minimises the front window - is a one-shot: it never arms, holds
- * nothing and has no state to leave. It is judged from a short history of the
- * palm's motion, only while the machine is IDLE and only outside a refractory
- * period after any release, and it reports itself on a single frame. See
- * flick_seen below.
+ * One gesture does not go through any of that. The FLICK - an open palm held
+ * still and then dropped, which minimises the front window - is a one-shot: it
+ * never arms and has no state to leave. It does hold a pose first, like the
+ * others, but it is judged from a short history of the palm's motion rather
+ * than by the state machine, only while the machine is IDLE and only outside a
+ * refractory period after any release, and it reports itself on a single frame.
+ * See flick_remember and flick_seen below.
  *
  * This file owns what gestures have in common, so it is written and tested
  * once: which frames are usable at all, how long a pose must hold, release,
@@ -111,20 +112,42 @@ gv_config gv_default_config(void)
         .resize_rate_gain  = 4.5f,
         /* About every other frame at 30 fps. See gesture.h. */
         .win_write_interval_sec = 0.06f,
-        /* The flick. A deliberate swipe down covers more than a hand-length in
-         * a third of a second; a hand being lowered, or waved, does not do that
-         * in a straight line with the palm open at both ends. Proxies from the
-         * design spec until a guided flick clip exists - what they ARE measured
-         * against is the negative corpus (every recording on disk), where they
-         * fire nothing; see the spec's Findings. */
-        .flick_travel         = 1.5f,
-        .flick_window_sec     = 0.35f,
+        /* The flick: an open palm held, then dropped. See gesture.h for why it
+         * has two halves - in short, because a downward motion on its own
+         * cannot be told from a hand being put down, and the study that
+         * measured it is in the design spec's Findings.
+         *
+         * 0.25 s is the same order as arm_hold_sec (0.25), which is what a
+         * deliberate pause already costs elsewhere in this app. 1.0
+         * hand-lengths per second is a hand that is meant to be still: on the
+         * recordings, runs under that limit reach 0.9 - 1.7 s, so a resting
+         * hand clears it easily. 0.8 hand-lengths inside 0.6 s is a little
+         * under the owner's own measured swipes (0.78 - 1.07 hand-lengths),
+         * which the hold now makes safe to ask for.
+         *
+         * All four are PROXIES for the positive side: nobody has recorded a
+         * deliberate hold-then-drop yet, and the owner's own session has no
+         * hold before any of its swipes, so it fires nothing under this rule.
+         * What IS measured is the negative side - zero on all eighteen
+         * recordings, about forty minutes, at every setting tried. */
+        .flick_drop           = 0.8f,
+        .flick_drop_window_sec = 0.6f,
+        .flick_hold_sec       = 0.25f,
+        .flick_still_speed    = 1.0f,
         .flick_max_sideways   = 0.5f,
         /* 1.5 s, not 1.0: with the motion rule alone the recordings produce
          * twelve downward sweeps of an open palm, and the last of them that is
          * not a genuine gesture lands 1.10 s after a release (a hand lowered
          * after a slide, then dropped out of frame). 1.0 let that one through. */
         .flick_refractory_sec = 1.5f,
+        /* A tenth of the frame height. Measured: across the frames of the
+         * motion each of the recordings' two false flicks fired in, the hand's
+         * lowest landmark never came above 0.97 and 0.91 of the frame height,
+         * while the deepest any open-palm motion in the live session reached
+         * was 0.89. 0.10 is the round number between them, and the gap is
+         * narrow - 0.89 against 0.91 - so this is a measured threshold, not a
+         * comfortable one. */
+        .flick_edge_margin    = 0.10f,
     };
     return cfg;
 }
@@ -171,13 +194,22 @@ static int config_is_valid(const gv_config *c)
                    isfinite(c->resize_dead_zone) &&
                    c->resize_rate_gain >= 0.0f && isfinite(c->resize_rate_gain) &&
                    c->win_write_interval_sec >= 0.0f && isfinite(c->win_write_interval_sec);
-    /* A flick with no travel, or no window to travel in, would fire on
-     * anything; the other two may be zero (no sideways travel at all; no
-     * quiet time), which is strict and slack respectively, but not nonsense. */
-    int flick_ok = c->flick_travel > 0.0f && isfinite(c->flick_travel) &&
-                   c->flick_window_sec > 0.0f && isfinite(c->flick_window_sec) &&
+    /* A flick with no drop, no window to drop in, no hold or no speed limit
+     * would fire on anything; the other two may be zero (no sideways travel at
+     * all; no quiet time), which is strict and slack respectively, but not
+     * nonsense. */
+    int flick_ok = c->flick_drop > 0.0f && isfinite(c->flick_drop) &&
+                   c->flick_drop_window_sec > 0.0f && isfinite(c->flick_drop_window_sec) &&
+                   /* a hold of no length, or one that any speed satisfies, is
+                    * no hold at all, and the gesture would be the bare drop
+                    * again - the thing this rule exists to stop */
+                   c->flick_hold_sec > 0.0f && isfinite(c->flick_hold_sec) &&
+                   c->flick_still_speed > 0.0f && isfinite(c->flick_still_speed) &&
                    c->flick_max_sideways >= 0.0f && isfinite(c->flick_max_sideways) &&
-                   c->flick_refractory_sec >= 0.0f && isfinite(c->flick_refractory_sec);
+                   c->flick_refractory_sec >= 0.0f && isfinite(c->flick_refractory_sec) &&
+                   /* as with edge_margin: half the frame or more would leave
+                    * nowhere for a hand to be "in the picture" */
+                   c->flick_edge_margin >= 0.0f && c->flick_edge_margin < 0.5f;
 
     return pose_ok && gate_ok && scale_ok && flick_ok &&
            c->aspect > 0.0f && isfinite(c->aspect) &&
@@ -343,38 +375,85 @@ static float active_scale(const gv_ctx *ctx)
 
 /* --- the flick ---------------------------------------------------------- */
 
-/* Note one usable frame in the ring buffer. Every usable frame goes in,
- * whatever the state machine is doing with it, so that the moment the state is
- * idle the history needed to judge a flick is already there. */
+/* Note one usable frame in the ring buffer, and carry the hold forward.
+ *
+ * Every usable frame goes in, whatever the state machine is doing with it, so
+ * that the moment the state is idle the history needed to judge a flick is
+ * already there. The one thing computed rather than copied is `held`: how long
+ * an open palm has been held nearly still, ending at this frame. Accumulating
+ * it here, one frame at a time, is what lets flick_seen ask "was this frame the
+ * end of a long enough hold?" by looking at a single entry. */
 static void flick_remember(gv_ctx *ctx, const gv_frame *f, double t)
 {
     const gv_config *cfg = &ctx->cfg;
+    float x = gv_palm_x(f, cfg->aspect);
+    float y = gv_palm_y(f);
+    float scale = gv_hand_scale(f, cfg->aspect);
+
+    /* A hand collapsed to a dot is a detector glitch (frame_is_plausible's
+     * comment records a measured 0.01x). Dividing by such a scale would make
+     * any wobble a drop, so the frame is dropped whole: it neither continues a
+     * hold nor breaks one, and the next frame's speed is measured across it -
+     * where the tracking-gap rule can see it. */
+    if (scale < MIN_HAND_SCALE)
+        return;
+
+    /* Negative means "this frame is not part of a held, still open palm". */
+    float held = -1.0f;
+    if (gv_pose_is_open_palm(f, cfg->aspect, &cfg->pose)) {
+        double dt = ctx->flick_prev.valid ? t - ctx->flick_prev.t : 0.0;
+        /* A hole longer than the grace begins a new run rather than continuing
+         * one: nothing is known about what the hand did inside it. */
+        int continuous = ctx->flick_prev.valid && dt > 0.0 &&
+                         dt <= (double)cfg->release_grace_sec;
+        if (!continuous) {
+            held = 0.0f;                       /* a run starts here */
+        } else {
+            float speed = hypotf(x - ctx->flick_prev.x, y - ctx->flick_prev.y) /
+                          scale / (float)dt;   /* hand-lengths per second */
+            if (speed < cfg->flick_still_speed)
+                held = ctx->flick_prev.held >= 0.0f
+                     ? ctx->flick_prev.held + (float)dt  /* the run goes on ... */
+                     : 0.0f;                             /* ... or starts here */
+        }
+    }
+
     int i = ctx->flick_next;
     ctx->flick_hist[i].t = t;
-    ctx->flick_hist[i].x = gv_palm_x(f, cfg->aspect);
-    ctx->flick_hist[i].y = gv_palm_y(f);
-    ctx->flick_hist[i].scale = gv_hand_scale(f, cfg->aspect);
-    ctx->flick_hist[i].open = gv_pose_is_open_palm(f, cfg->aspect, &cfg->pose);
+    ctx->flick_hist[i].x = x;
+    ctx->flick_hist[i].y = y;
+    ctx->flick_hist[i].scale = scale;
+    ctx->flick_hist[i].low = gv_hand_lowest_y(f);
+    ctx->flick_hist[i].held = held;
+    ctx->flick_hist[i].fist = gv_pose_is_fist(f, cfg->aspect, &cfg->pose);
     ctx->flick_next = (i + 1) % GV_FLICK_HISTORY;
     if (ctx->flick_count < GV_FLICK_HISTORY)
         ctx->flick_count++;
+
+    ctx->flick_prev.t = t;
+    ctx->flick_prev.x = x;
+    ctx->flick_prev.y = y;
+    ctx->flick_prev.held = held;
+    ctx->flick_prev.valid = 1;
 }
 
-/* Did the hand just flick?
+/* Did the hand just flick? That is: did it drop, from a hold?
  *
- * The span judged is "as far back as flick_window_sec reaches", and the test is
- * made on its two ends: an open palm at both, no hole in tracking inside it
- * longer than the release grace (a hand that vanishes and reappears lower down
- * did not necessarily travel there), and the palm centre down by flick_travel
- * hand-lengths with little sideways travel. Taking the whole window rather than
- * the best sub-span inside it is deliberate: it means a frame that is NOT an
- * open palm, or a jump, anywhere in the last third of a second is enough to say
- * no, which is the side to err on for a gesture that closes a window.
+ * This frame is the end of the drop, so the questions about the hand's shape
+ * and place are asked of it directly: not a fist, and still inside the picture.
+ * Then the search goes back through flick_drop_window_sec of history for a
+ * frame that ENDED a long enough hold and sits far enough above this one. The
+ * most recent such frame wins, because it is the hold the drop actually came
+ * from; the walk stops at a hole in tracking longer than the release grace,
+ * since a hand that vanishes and reappears lower down did not necessarily
+ * travel there.
  *
  * Units: gv_palm_x multiplies by the aspect and gv_palm_y does not need to, so
  * both are in frame heights, as is the hand scale (see pose.h). Dividing by the
  * hand scale therefore gives hand-lengths on either axis, with no aspect factor
- * left over. */
+ * left over. The scale used is the HELD frame's - the hand as it was when the
+ * drop began - so a hand that shrinks on the way down does not shrink the
+ * measurement with it. */
 static int flick_seen(const gv_ctx *ctx, double now)
 {
     const gv_config *cfg = &ctx->cfg;
@@ -382,46 +461,43 @@ static int flick_seen(const gv_ctx *ctx, double now)
         return 0;
 
     int newest = (ctx->flick_next - 1 + GV_FLICK_HISTORY) % GV_FLICK_HISTORY;
-    if (!ctx->flick_hist[newest].open)
+    if (ctx->flick_hist[newest].fist)
         return 0;
 
-    /* Walk back through the buffer while the frames are inside the window.
-     * `back` counts entries from the newest, so it stops at flick_count and
+    /* Leaving the picture is not a gesture. A hand taken away drops out of the
+     * bottom of the frame, and that is what both of the recordings' false
+     * flicks were: across the frames of the motion each of them fired in, the
+     * hand's lowest landmark never came above 0.97 and 0.91 of the frame
+     * height, while the deepest any of the live session's open-palm motions
+     * reached - leaving out two that were already outside the frame - was 0.89.
+     * MediaPipe goes on reporting landmarks past the edge, so this is a margin
+     * inside a real picture, not a clamp. */
+    if (ctx->flick_hist[newest].low > 1.0f - cfg->flick_edge_margin)
+        return 0;
+
+    /* `back` counts entries from the newest, so it stops at flick_count and
      * never reads a slot that has not been written (or one left over from
-     * before the history was cleared). */
-    int oldest = newest;
+     * before the history was cleared). `later` is the newest frame accepted so
+     * far, which is what a hole is measured against. */
+    int later = newest;
     for (int back = 2; back <= ctx->flick_count; back++) {
         int i = (ctx->flick_next - back + GV_FLICK_HISTORY) % GV_FLICK_HISTORY;
-        int later = (i + 1) % GV_FLICK_HISTORY;
-        if (now - ctx->flick_hist[i].t > (double)cfg->flick_window_sec)
+        if (now - ctx->flick_hist[i].t > (double)cfg->flick_drop_window_sec)
             break;
         if (ctx->flick_hist[later].t - ctx->flick_hist[i].t > (double)cfg->release_grace_sec)
-            return 0;
-        oldest = i;
+            break;
+        later = i;
+
+        if (ctx->flick_hist[i].held < cfg->flick_hold_sec)
+            continue; /* not the end of a hold; some earlier frame may be */
+
+        float hl = ctx->flick_hist[i].scale;
+        float dy = (ctx->flick_hist[newest].y - ctx->flick_hist[i].y) / hl; /* down is +y */
+        float dx = fabsf(ctx->flick_hist[newest].x - ctx->flick_hist[i].x) / hl;
+        if (dy >= cfg->flick_drop && dx <= cfg->flick_max_sideways * dy)
+            return 1;
     }
-    if (oldest == newest || !ctx->flick_hist[oldest].open)
-        return 0;
-
-    float hl = ctx->flick_hist[oldest].scale;
-    if (hl < MIN_HAND_SCALE)
-        return 0; /* not a hand; dividing by it would make any wobble a flick */
-
-    /* One hand at both ends, not two. A hand dropping out of the bottom of the
-     * frame changes apparent size as it goes; a hand swiped across the picture
-     * does not. Both of the false flicks the recordings produced were the first
-     * kind - the worse of them grew 1.71x in a third of a second - and the
-     * travel below is counted in hand-lengths, a unit that means nothing if the
-     * hand was not the same size at each end. This is the gate every armed frame
-     * is already judged by (frame_is_plausible), applied across the span
-     * rather than frame to frame. Measured: it takes the corpus to zero false
-     * flicks, where a longer refractory and a larger travel could not. */
-    float size = ctx->flick_hist[newest].scale / hl;
-    if (size < cfg->gate_scale_min || size > cfg->gate_scale_max)
-        return 0;
-
-    float dy = (ctx->flick_hist[newest].y - ctx->flick_hist[oldest].y) / hl; /* down is +y */
-    float dx = fabsf(ctx->flick_hist[newest].x - ctx->flick_hist[oldest].x) / hl;
-    return dy >= cfg->flick_travel && dx <= cfg->flick_max_sideways * dy;
+    return 0;
 }
 
 gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
@@ -558,8 +634,10 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
         t - ctx->last_flick_t   >= (double)cfg->flick_refractory_sec &&
         flick_seen(ctx, t)) {
         ctx->last_flick_t = t;
-        /* Forget the motion that fired: as the window slides on it would
-         * otherwise still look like a flick for another third of a second. */
+        /* Forget the motion that fired: as the drop window slides on, the same
+         * hold and the same drop would otherwise go on firing every frame for
+         * another half second. (flick_prev is deliberately NOT cleared: a hold
+         * still under way is a fact about the hand, not about the gesture.) */
         ctx->flick_count = 0;
         flicked = 1;
     }

@@ -9,14 +9,28 @@
  * Unlike test_gesture, which slides sideways, everything here is about falling,
  * so `dy` is measured DOWN (the direction image y already grows in).
  *
+ * The gesture is in two parts: an open palm HELD nearly still, and then a DROP.
  * The distances and durations below are arithmetic on the SHIPPED defaults
- * (flick_travel 1.5 hand-lengths inside flick_window_sec 0.35 s, sideways at
- * most flick_max_sideways 0.5 of the fall, the hand the same size at both ends
- * of the span within gate_scale_min .. gate_scale_max = 0.7 .. 1.4, and
+ * (the hold: flick_hold_sec 0.25 s of open palm moving slower than
+ * flick_still_speed 1.0 hand-lengths per second; the drop: flick_drop 0.8
+ * hand-lengths below where it was held, inside flick_drop_window_sec 0.6 s,
+ * sideways at most flick_max_sideways 0.5 of the drop, no landmark past
+ * 1 - flick_edge_margin 0.1 of the frame height and not a fist at the end;
  * flick_refractory_sec 1.5 after any release and after the previous flick).
  * That is deliberate: this gesture's whole risk is firing when nobody asked, so
  * the tests exercise the numbers that actually ship. If a default is retuned,
  * the motions here move with it.
+ *
+ * Most tests hold for 0.4 s rather than the 0.25 s minimum. At 30 fps a 0.25 s
+ * hold is eight frames with no margin at all, and a test that fails because it
+ * is one frame short of a hold is a test about rounding, not about the rule.
+ *
+ * WHERE THE HAND STARTS. The fixture photo has the hand low in the picture -
+ * its lowest landmark sits at 0.82 of the frame height - so a two hand-length
+ * fall from there ends outside the frame entirely. Every session below
+ * therefore begins with the hand raised (see `start_with`), and the tests that
+ * are about the edge move it back down on purpose. Without that, every test
+ * here would silently be a test of the edge veto.
  */
 #include "test.h"
 
@@ -44,11 +58,17 @@ typedef struct {
     float     dx, dy;
 } session;
 
+/* Two and a half hand-lengths up from where the fixture photo puts the hand:
+ * far enough that a two hand-length fall ends at 0.72 of the frame height,
+ * clear of the edge veto's 0.9, and not so far that the hand leaves the top. */
+#define START_DY (-2.5f)
+
 static session start_with(gv_config cfg)
 {
     session s = { 0 };
     s.ctx = gv_create(&cfg);
     s.out.scale = 1.0f;
+    s.dy = START_DY;
     gv_set_current_volume(s.ctx, START_VOLUME);
     return s;
 }
@@ -124,9 +144,10 @@ static void sweep(session *s, float dx_hands, float dy_hands, double seconds)
     travel(s, &fixture_real_open_palm, dx_hands, dy_hands, seconds);
 }
 
-/* Move the hand without showing any of the journey: where it is when tracking
- * picks it up again. */
-static void reappears_at(session *s, float dx, float dy) { s->dx = dx; s->dy = dy; }
+/* Put the hand somewhere without showing any of the journey: where it starts,
+ * or where tracking picks it up again after losing it. Offsets are from the
+ * fixture photo's own position, so 0 is the hand low in the picture. */
+static void hand_at(session *s, float dx, float dy) { s->dx = dx; s->dy = dy; }
 
 /* The fixture, resized about its palm centre by `k`. The palm centre stays
  * where it was, so this changes the hand's apparent SIZE and nothing else -
@@ -140,37 +161,6 @@ static gv_frame resized(const gv_frame *hand, float k)
         f.lm[i].y = cy + (hand->lm[i].y - cy) * k;
     }
     return f;
-}
-
-/* The open palm falling `dy_hands` in a quarter of a second, while its apparent
- * size is multiplied by `k` over every flick window. The size changes at that
- * same steady rate before and after the fall as well, so WHATEVER span the rule
- * ends up judging, the hand at its two ends differs in size by k - there is no
- * moment where the span happens to hold two frames of equal size. (The judged
- * span is ten frames, a shade under the 0.35 s window, so the ends differ by
- * k^0.95 in practice: 0.61 and 1.45 against the 0.7 - 1.4 gate.) k = 1 leaves
- * the size alone and is the control: the identical fall, one flick.
- *
- * The fall is deliberately a long one. Travel is counted in hand-lengths of the
- * span's FIRST frame, so a hand that has been growing is measured against a
- * bigger hand than it started as, and a 2 hand-length fall would fail the
- * travel test on its own - which would make this a test of the travel rule
- * wearing a disguise. At 3 the travel test passes in all three cases (2.0, 4.9
- * and 3.0 hand-lengths), and the hand's size is the only thing that differs. */
-static void fall_while_resizing(session *s, float k, float dy_hands)
-{
-    const float window = gv_default_config().flick_window_sec;
-    int lead = (int)(0.4 / DT + 0.5), fall = (int)(0.25 / DT + 0.5), tail = (int)(0.4 / DT + 0.5);
-    for (int i = 0; i < lead + fall + tail; i++) {
-        float size = powf(k, (float)(i * DT) / window);
-        float fallen = i < lead ? 0.0f
-                     : (i < lead + fall ? dy_hands * (float)(i - lead + 1) / (float)fall
-                                        : dy_hands);
-        gv_frame smaller = resized(&fixture_real_open_palm, size);
-        gv_frame f = moved(&smaller, s->dx, s->dy + fallen);
-        frame(s, &f);
-    }
-    s->dy += dy_hands;
 }
 
 /* The fist fixture, moved so that its palm centre sits exactly where the open
@@ -190,16 +180,54 @@ static gv_frame fist_where_the_palm_is(void)
     return f;
 }
 
-/* --- the gesture ------------------------------------------------------- */
+/* The open palm held still, then dropping `dy_hands` in a quarter of a second
+ * while its apparent size is multiplied by `k` across that drop: what happens
+ * when the drop also carries the hand away from the camera (k < 1) or towards
+ * it (k > 1). The size is left alone during the hold, so the drop is measured
+ * in hand-lengths of the hand as it was held. */
+static void fall_while_resizing(session *s, float k, float dy_hands)
+{
+    /* The lead is the HOLD: the hand is motionless and at one size through it,
+     * so it is where the drop is measured from. */
+    int lead = (int)(0.4 / DT + 0.5), fall = (int)(0.25 / DT + 0.5), tail = (int)(0.3 / DT + 0.5);
+    for (int i = 0; i < lead + fall + tail; i++) {
+        float done = i < lead ? 0.0f
+                   : (i < lead + fall ? (float)(i - lead + 1) / (float)fall : 1.0f);
+        gv_frame sized = resized(&fixture_real_open_palm, 1.0f + (k - 1.0f) * done);
+        gv_frame f = moved(&sized, s->dx, s->dy + dy_hands * done);
+        frame(s, &f);
+    }
+    s->dy += dy_hands;
+}
 
-static void a_fast_downward_open_palm_fires_once(void)
+/* The open palm blurred part of the way towards a fist: every landmark moved a
+ * fraction `k` from the open-palm fixture to the fist (shifted first so the two
+ * hands' palm centres coincide, so only the FINGERS change). At a quarter of
+ * the way the hand is neither confidently open nor confidently closed, which is
+ * what the end of a fast swipe looks like: motion blur costs the fingers their
+ * "long AND straight" reading. The tests assert that rather than trust it. */
+static gv_frame blurred(float k)
+{
+    gv_frame fist = fist_where_the_palm_is();
+    gv_frame f = fixture_real_open_palm;
+    for (int i = 0; i < GV_NUM_LANDMARKS; i++) {
+        f.lm[i].x += (fist.lm[i].x - f.lm[i].x) * k;
+        f.lm[i].y += (fist.lm[i].y - f.lm[i].y) * k;
+        f.lm[i].z += (fist.lm[i].z - f.lm[i].z) * k;
+    }
+    return f;
+}
+
+/* --- the gesture: hold, then drop --------------------------------------- */
+
+static void a_held_open_palm_then_a_drop_fires_once(void)
 {
     session s = start();
-    still(&s, &fixture_real_open_palm, 0.3);
-    sweep(&s, 0.0f, 2.0f, 0.25);               /* two hand-lengths in a quarter second */
+    still(&s, &fixture_real_open_palm, 0.4);   /* held: the half of the gesture that says "I mean it" */
+    sweep(&s, 0.0f, 1.2f, 0.3);                /* dropped: 1.2 hand-lengths, well over the 0.8 */
     still(&s, &fixture_real_open_palm, 0.5);   /* and rests where it landed */
 
-    CHECK(s.flicks == 1);                      /* once, not once per frame of the fall */
+    CHECK(s.flicks == 1);                      /* once, not once per frame of the drop */
     CHECK(s.at_flick.state == GV_IDLE);        /* a flick never arms ... */
     CHECK(s.busy_frames == 0);                 /* ... nor does the palm arm anything else */
     CHECK(s.at_flick.changed == 1);
@@ -209,145 +237,255 @@ static void a_fast_downward_open_palm_fires_once(void)
     finish(&s);
 }
 
-static void too_slow_does_not_fire(void)
+static void a_drop_with_no_hold_before_it_does_not_fire(void)
 {
-    /* The same two hand-lengths, taken four times as long: inside any 0.35 s
-     * window the palm has fallen about half a hand-length. Lowering a hand is
-     * not a flick. */
+    /* THE REASON THIS GESTURE HAS TWO HALVES. Until this round the fall alone
+     * WAS the gesture, and it could not be told apart from a hand being put
+     * down: measured on a live session, the owner's own swipes covered 0.78 -
+     * 1.07 hand-lengths, and so does ordinary hand-lowering. Here the hand
+     * arrives already moving and falls two hand-lengths at speed - more than
+     * the old rule ever asked for - and nothing happens, because it was never
+     * held. */
     session s = start();
-    still(&s, &fixture_real_open_palm, 0.3);
-    sweep(&s, 0.0f, 2.0f, 1.0);
+    sweep(&s, 0.0f, 2.0f, 0.25);
     still(&s, &fixture_real_open_palm, 0.5);
     CHECK(s.flicks == 0);
     finish(&s);
 }
 
-static void not_far_enough_does_not_fire(void)
+static void a_hand_lowered_slowly_instead_of_held_does_not_fire(void)
 {
+    /* The hand drifts down at 2 hand-lengths a second - twice the still limit -
+     * for 0.4 s and then drops. Drifting is not holding: no frame of the drift
+     * counts towards a hold, so the drop has nothing to be measured from. This
+     * is the shape of a hand being lowered and then dropped, which the
+     * recordings are full of. */
     session s = start();
-    still(&s, &fixture_real_open_palm, 0.3);
-    sweep(&s, 0.0f, 1.0f, 0.25);   /* fast, but only one hand-length */
+    travel(&s, &fixture_real_open_palm, 0.0f, 0.8f, 0.4);
+    sweep(&s, 0.0f, 1.2f, 0.3);
     still(&s, &fixture_real_open_palm, 0.5);
     CHECK(s.flicks == 0);
     finish(&s);
 }
 
-static void sideways_does_not_fire(void)
+static void a_drop_slower_than_the_drop_window_does_not_fire(void)
 {
-    /* Diagonal: it falls far enough and fast enough, but travels just as far
-     * across, which is a wave, not a flick. */
+    /* Held, then lowered at 1.1 hand-lengths a second: fast enough to end the
+     * hold (the limit is 1.0) and slow enough that 0.6 s later - when the held
+     * frames leave the drop window - the hand has only come down 0.66, short of
+     * the 0.8. The band between those two limits is narrow by construction: a
+     * drop slower than 1.0 goes on counting as a hold and the reference follows
+     * the hand down, and one faster than 1.33 covers the 0.8 inside the window.
+     * That is the arithmetic being pinned here, not a round number. */
     session s = start();
-    still(&s, &fixture_real_open_palm, 0.3);
-    sweep(&s, 2.0f, 2.0f, 0.25);
+    still(&s, &fixture_real_open_palm, 0.4);
+    travel(&s, &fixture_real_open_palm, 0.0f, 1.32f, 1.2);
     still(&s, &fixture_real_open_palm, 0.5);
     CHECK(s.flicks == 0);
     finish(&s);
+}
 
-    /* And straight across, which has no fall at all. */
+static void a_drop_that_is_not_far_enough_does_not_fire(void)
+{
+    session s = start();
+    still(&s, &fixture_real_open_palm, 0.4);
+    sweep(&s, 0.0f, 0.5f, 0.2);   /* fast, but half a hand-length */
+    still(&s, &fixture_real_open_palm, 0.5);
+    CHECK(s.flicks == 0);
+    finish(&s);
+}
+
+static void sideways_after_a_hold_does_not_fire(void)
+{
+    /* Diagonal: far enough down and fast enough, but just as far across, which
+     * is a wave, not a drop. */
+    session s = start();
+    still(&s, &fixture_real_open_palm, 0.4);
+    sweep(&s, 1.2f, 1.2f, 0.3);
+    still(&s, &fixture_real_open_palm, 0.4);
+    CHECK(s.flicks == 0);
+    finish(&s);
+
+    /* And straight across, which has no drop at all. */
     session t = start();
-    still(&t, &fixture_real_open_palm, 0.3);
-    sweep(&t, 2.0f, 0.0f, 0.25);
-    still(&t, &fixture_real_open_palm, 0.5);
+    still(&t, &fixture_real_open_palm, 0.4);
+    sweep(&t, 1.2f, 0.0f, 0.3);
+    still(&t, &fixture_real_open_palm, 0.4);
     CHECK(t.flicks == 0);
     finish(&t);
 }
 
-static void upward_does_not_fire(void)
+static void upward_after_a_hold_does_not_fire(void)
 {
     session s = start();
-    reappears_at(&s, 0.0f, 2.0f);              /* start low, so the rise stays in frame */
-    still(&s, &fixture_real_open_palm, 0.3);
-    sweep(&s, 0.0f, -2.0f, 0.25);
-    still(&s, &fixture_real_open_palm, 0.5);
-    CHECK(s.flicks == 0);
-    finish(&s);
-}
-
-static void a_closed_hand_sweeping_down_does_not_fire(void)
-{
-    /* The motion of a flick made by a fist. The pose carries the veto: 46% of
-     * the talking-hands frames read as an open palm, so the pose alone can
-     * never be enough - but without it, every dropped hand is a flick. */
-    session s = start();
-    still(&s, &fixture_real_fist, 0.3);
-    travel(&s, &fixture_real_fist, 0.0f, 2.0f, 0.25);
-    still(&s, &fixture_real_fist, 0.5);
-    CHECK(s.flicks == 0);
-    finish(&s);
-}
-
-static void a_hand_that_opens_as_it_falls_does_not_fire(void)
-{
-    /* The same two hand-lengths in a quarter second as a real flick, but the
-     * hand is closed for the first two thirds of the fall and only opens near
-     * the bottom: a hand being dropped and relaxed. Measured end to end that is
-     * a flick; measured over the part where the palm was actually open it is
-     * 0.8 hand-lengths, well under the travel. The palm has to be open at BOTH
-     * ends of the span, or the gesture becomes "let your hand down", which is
-     * the commonest thing in the recordings. */
-    session s = start();
-    gv_frame fist = fist_where_the_palm_is();
-    still(&s, &fist, 0.3);
-    travel(&s, &fist, 0.0f, 1.2f, 0.15);
-    sweep(&s, 0.0f, 0.8f, 0.1);
+    hand_at(&s, 0.0f, START_DY + 1.2f);        /* start low, so the rise stays in frame */
+    still(&s, &fixture_real_open_palm, 0.4);
+    sweep(&s, 0.0f, -1.2f, 0.3);
     still(&s, &fixture_real_open_palm, 0.4);
     CHECK(s.flicks == 0);
     finish(&s);
 }
 
-static void a_hand_that_closes_as_it_falls_does_not_fire(void)
+static void a_drop_that_ends_out_of_the_picture_does_not_fire(void)
 {
-    /* The mirror image: open at the top, closed for the last two thirds of the
-     * fall - a hand dropping to grab something. Both ends of the span have to
-     * be an open palm, so this is not a flick either, and it stays not a flick
-     * for as long as the hand is closed. */
+    /* Two identical hold-and-drops; the only difference is where in the frame
+     * they happen. The first is the gesture. The second starts from where the
+     * fixture photo puts the hand - low - so the same drop carries it out of the
+     * bottom of the picture, which is a hand being taken away. MediaPipe keeps
+     * reporting landmarks past the edge, so "out of the picture" is a landmark
+     * reading beyond 1 - flick_edge_margin, not a hand that vanished. */
+    session inside = start();
+    still(&inside, &fixture_real_open_palm, 0.4);
+    sweep(&inside, 0.0f, 1.2f, 0.3);
+    still(&inside, &fixture_real_open_palm, 0.4);
+    CHECK(inside.flicks == 1);
+    finish(&inside);
+
+    session leaving = start();
+    hand_at(&leaving, 0.0f, 0.0f);
+    still(&leaving, &fixture_real_open_palm, 0.4);
+    sweep(&leaving, 0.0f, 1.2f, 0.3);
+    still(&leaving, &fixture_real_open_palm, 0.4);
+    CHECK(leaving.flicks == 0);
+    finish(&leaving);
+}
+
+static void a_drop_ending_in_a_fist_does_not_fire(void)
+{
+    /* Held open, then the hand closes as it falls - a hand dropping to grab
+     * something. The end of the drop may be any shape EXCEPT a closed one (see
+     * the blurred-palm test below), and it stays not a flick for as long as the
+     * hand is closed. */
     session s = start();
     gv_frame fist = fist_where_the_palm_is();
-    still(&s, &fixture_real_open_palm, 0.3);
-    sweep(&s, 0.0f, 0.8f, 0.1);
-    travel(&s, &fist, 0.0f, 1.2f, 0.15);
+    still(&s, &fixture_real_open_palm, 0.4);
+    sweep(&s, 0.0f, 0.4f, 0.1);
+    travel(&s, &fist, 0.0f, 0.8f, 0.2);
     still(&s, &fist, 0.4);
     CHECK(s.flicks == 0);
     finish(&s);
 }
 
-static void a_hand_that_shrinks_or_grows_while_falling_is_not_a_flick(void)
+static void a_fist_held_still_then_dropped_does_not_fire(void)
 {
-    /* A hand dropping out of the bottom of the frame changes apparent size as
-     * it goes; a hand swiped across the picture does not. Both false flicks the
-     * recordings produced were the first kind (the worse of them grew 1.71x in
-     * a third of a second), so the span has to show one hand, by the same scale
-     * gate that judges every armed frame: 0.6 is below gate_scale_min (0.7) and
-     * 1.5 is above gate_scale_max (1.4). The fall is identical in all three. */
-    session shrinking = start();
-    fall_while_resizing(&shrinking, 0.6f, 3.0f);
-    CHECK(shrinking.flicks == 0);
-    finish(&shrinking);
-
-    session growing = start();
-    fall_while_resizing(&growing, 1.5f, 3.0f);
-    CHECK(growing.flicks == 0);
-    finish(&growing);
-
-    session steady = start();
-    fall_while_resizing(&steady, 1.0f, 3.0f);
-    CHECK(steady.flicks == 1);   /* the same fall, at one size: a flick */
-    finish(&steady);
+    /* The hold has to be an OPEN PALM on every one of its frames. A fist held
+     * just as still, dropped just as far, is nothing: 46% of the talking-hands
+     * frames read as an open palm, so the pose alone could never carry this
+     * gesture - but without it, every resting hand that then moves is one. */
+    session s = start();
+    gv_frame fist = fist_where_the_palm_is();
+    still(&s, &fist, 0.4);
+    travel(&s, &fist, 0.0f, 1.2f, 0.3);
+    still(&s, &fist, 0.4);
+    CHECK(s.flicks == 0);
+    finish(&s);
 }
 
-static void a_gap_in_tracking_breaks_the_sweep(void)
+static void a_half_open_hand_held_still_then_dropped_does_not_fire(void)
 {
-    /* The hand is still at the top, disappears for eight frames, and is next
-     * seen two hand-lengths lower. Measured end to end that is a flick; but
-     * the 0.30 s hole between the two real frames is longer than the release
-     * grace (0.25 s), and nothing says the hand travelled there rather than
-     * being put there. (The hole is still shorter than the 0.35 s window, so
-     * the two frames really are both in the span being judged - that is what
-     * makes this a test of the gap rule and not of the window.) */
+    /* The two halves are asked DIFFERENT questions, and this is the half that
+     * is strict. A hand blurred half way to a fist may END a drop (see
+     * a_drop_that_ends_with_the_palm_blurred_still_fires) but may not BE the
+     * hold: holding still is the deliberate part, and the pose there has to be
+     * a confident open palm. Everything else about this motion would pass - it
+     * is held, it drops 1.2 hand-lengths straight down, it stays in frame and
+     * it does not end in a fist. */
+    gv_config cfg = shipped();
+    gv_frame half = blurred(0.25f);
+    CHECK(!gv_pose_is_open_palm(&half, REAL, &cfg.pose));
+    CHECK(!gv_pose_is_fist(&half, REAL, &cfg.pose));
+
     session s = start();
-    still(&s, &fixture_real_open_palm, 0.3);
-    vanish(&s, 8 * DT);
-    reappears_at(&s, 0.0f, 2.0f);
+    still(&s, &half, 0.4);
+    travel(&s, &half, 0.0f, 1.2f, 0.3);
+    still(&s, &half, 0.4);
+    CHECK(s.flicks == 0);
+    finish(&s);
+}
+
+static void the_drop_is_measured_against_the_hand_as_it_was_held(void)
+{
+    /* Half a hand-length down - short of the 0.8 - while the hand shrinks to
+     * half its size, which is what moving away from the camera does. Measured
+     * in hand-lengths of the hand as it was HELD it is 0.5 and nothing happens;
+     * measured against the smaller hand it ended as, the same motion would read
+     * as a full hand-length and fire. The reference is the held frame, and this
+     * pins which end of the drop it is taken from. */
+    session s = start();
+    fall_while_resizing(&s, 0.5f, 0.5f);
+    CHECK(s.flicks == 0);
+    finish(&s);
+}
+
+static void an_open_palm_held_still_and_left_there_never_fires(void)
+{
+    /* Three seconds of a held open palm and nothing else. The hold is half the
+     * gesture, never the whole of it: a hand can sit open in front of the
+     * camera for as long as it likes. */
+    session s = start();
+    still(&s, &fixture_real_open_palm, 3.0);
+    CHECK(s.flicks == 0);
+    CHECK(s.busy_frames == 0);
+    finish(&s);
+}
+
+static void a_hand_that_shrinks_as_it_drops_is_still_a_flick(void)
+{
+    /* A drop swings the hand away from the camera, so it gets smaller as it
+     * falls: on the owner's own session the real swipes measured 0.66, 0.68,
+     * 0.51 and 0.24 of their starting size. An earlier version of the rule
+     * required the hand to stay within 0.7 - 1.4 of its size across the span,
+     * which vetoed exactly those. There is no size condition any more; what
+     * stops a hand DROPPING OUT of the picture is the edge veto, tested
+     * above. */
+    session shrinking = start();
+    fall_while_resizing(&shrinking, 0.5f, 1.2f);
+    CHECK(shrinking.flicks == 1);
+    finish(&shrinking);
+
+    /* And towards the camera, for the same reason: growing is not evidence of
+     * anything either. */
+    session growing = start();
+    fall_while_resizing(&growing, 1.5f, 1.2f);
+    CHECK(growing.flicks == 1);
+    finish(&growing);
+}
+
+static void a_drop_that_ends_with_the_palm_blurred_still_fires(void)
+{
+    /* The same shape as a_drop_ending_in_a_fist_does_not_fire, but the hand
+     * ends half open rather than shut. Seven of the sixteen downward open-palm
+     * motions in the first live session had lost the open palm by their last
+     * sample (open(old,new) = 1,0): fast motion blurs the fingers and they stop
+     * reading as "long AND straight". So the end of the drop asks only that the
+     * hand is not CLOSED. */
+    gv_config cfg = shipped();
+    gv_frame half = blurred(0.25f);
+    CHECK(!gv_pose_is_open_palm(&half, REAL, &cfg.pose)); /* not open any more ... */
+    CHECK(!gv_pose_is_fist(&half, REAL, &cfg.pose));      /* ... but not a fist either */
+
+    session s = start();
+    still(&s, &fixture_real_open_palm, 0.4);
+    sweep(&s, 0.0f, 0.5f, 0.1);
+    travel(&s, &half, 0.0f, 0.7f, 0.15);
+    still(&s, &half, 0.3);
+    CHECK(s.flicks == 1);
+    finish(&s);
+}
+
+static void a_gap_in_tracking_breaks_the_drop(void)
+{
+    /* Held, then the hand disappears for nine frames and is next seen 1.2
+     * hand-lengths lower. Measured end to end that is the gesture; but the
+     * 0.30 s hole is longer than the release grace (0.25 s), and nothing says
+     * the hand travelled there rather than being put there. (The hole is still
+     * shorter than the 0.6 s drop window, so the held frames really are inside
+     * the span being searched - that is what makes this a test of the gap rule
+     * and not of the window.) */
+    session s = start();
+    still(&s, &fixture_real_open_palm, 0.4);
+    vanish(&s, 9 * DT);
+    hand_at(&s, 0.0f, START_DY + 1.2f);
     still(&s, &fixture_real_open_palm, 0.5);
     CHECK(s.flicks == 0);
     finish(&s);
@@ -357,27 +495,27 @@ static void a_gap_in_tracking_breaks_the_sweep(void)
 
 static void just_after_letting_go_nothing_fires(void)
 {
-    /* A volume slide, then the hand leaves and the slide releases, then the
-     * flick motion straight away. This is the shape of "finished adjusting,
-     * put the hand down", and it must not minimise the window just adjusted. */
+    /* A volume slide, then the hand leaves and the slide releases, then a hold
+     * and a drop straight away. This is the shape of "finished adjusting, put
+     * the hand down", and it must not minimise the window just adjusted. */
     session s = start();
     still(&s, &fixture_real_tight_two, 0.5);
     CHECK(s.out.state == GV_ARMED && s.out.kind == GV_KIND_VOLUME);
     vanish(&s, 0.3);                       /* longer than the release grace */
     CHECK(s.out.state == GV_IDLE);
-    still(&s, &fixture_real_open_palm, 0.3);
-    sweep(&s, 0.0f, 2.0f, 0.25);
+    still(&s, &fixture_real_open_palm, 0.4);
+    sweep(&s, 0.0f, 1.2f, 0.3);
     still(&s, &fixture_real_open_palm, 0.3);
     CHECK(s.flicks == 0);
     finish(&s);
 
-    /* The same sweep, well clear of the refractory: now it is a flick. */
+    /* The same hold and drop, well clear of the refractory: now it is a flick. */
     session t = start();
     still(&t, &fixture_real_tight_two, 0.5);
     CHECK(t.out.state == GV_ARMED && t.out.kind == GV_KIND_VOLUME);
     vanish(&t, 2.0);
-    still(&t, &fixture_real_open_palm, 0.3);
-    sweep(&t, 0.0f, 2.0f, 0.25);
+    still(&t, &fixture_real_open_palm, 0.4);
+    sweep(&t, 0.0f, 1.2f, 0.3);
     still(&t, &fixture_real_open_palm, 0.3);
     CHECK(t.flicks == 1);
     finish(&t);
@@ -385,41 +523,42 @@ static void just_after_letting_go_nothing_fires(void)
 
 static void a_second_flick_waits_for_the_refractory(void)
 {
-    /* Flick, raise the hand, flick again - all inside the refractory. Only the
-     * first one counts. */
+    /* Flick, raise the hand, hold and drop again - all inside the refractory.
+     * Only the first one counts. */
     session s = start();
-    still(&s, &fixture_real_open_palm, 0.3);
-    sweep(&s, 0.0f, 2.0f, 0.25);
-    sweep(&s, 0.0f, -2.0f, 0.3);           /* the hand comes back up */
-    still(&s, &fixture_real_open_palm, 0.2);
-    sweep(&s, 0.0f, 2.0f, 0.25);
+    still(&s, &fixture_real_open_palm, 0.4);
+    sweep(&s, 0.0f, 1.2f, 0.3);
+    sweep(&s, 0.0f, -1.2f, 0.3);           /* the hand comes back up */
+    still(&s, &fixture_real_open_palm, 0.4);
+    sweep(&s, 0.0f, 1.2f, 0.3);
     still(&s, &fixture_real_open_palm, 0.2);
     CHECK(s.flicks == 1);
     finish(&s);
 
-    /* The same two flicks, with a pause between them. */
+    /* The same two, with a longer hold between them: the second one is clear of
+     * the refractory and counts. */
     session t = start();
-    still(&t, &fixture_real_open_palm, 0.3);
-    sweep(&t, 0.0f, 2.0f, 0.25);
-    sweep(&t, 0.0f, -2.0f, 0.3);
+    still(&t, &fixture_real_open_palm, 0.4);
+    sweep(&t, 0.0f, 1.2f, 0.3);
+    sweep(&t, 0.0f, -1.2f, 0.3);
     still(&t, &fixture_real_open_palm, 1.8);
-    sweep(&t, 0.0f, 2.0f, 0.25);
+    sweep(&t, 0.0f, 1.2f, 0.3);
     still(&t, &fixture_real_open_palm, 0.2);
     CHECK(t.flicks == 2);
     finish(&t);
 }
 
-static void one_fall_fires_once_even_with_no_refractory(void)
+static void one_drop_fires_once_even_with_no_refractory(void)
 {
-    /* The refractory is not the only thing keeping a single fall to a single
-     * firing: the frames that fired are dropped from the history, so the same
-     * motion cannot be counted again as the window slides across it. Pinning
-     * the refractory to zero is what makes that rule visible on its own. */
+    /* The refractory is not the only thing keeping one drop to one firing: the
+     * frames that fired are dropped from the history, so the same motion cannot
+     * be counted again as the drop window slides across it. Pinning the
+     * refractory to zero is what makes that rule visible on its own. */
     gv_config c = shipped();
     c.flick_refractory_sec = 0.0f;
     session s = start_with(c);
-    still(&s, &fixture_real_open_palm, 0.3);
-    sweep(&s, 0.0f, 2.0f, 0.25);
+    still(&s, &fixture_real_open_palm, 0.4);
+    sweep(&s, 0.0f, 1.2f, 0.3);
     still(&s, &fixture_real_open_palm, 0.3);
     CHECK(s.flicks == 1);
     finish(&s);
@@ -435,7 +574,8 @@ static void a_flick_never_fires_while_armed(void)
     session s = start();
     still(&s, &fixture_real_tight_two, 0.5);
     CHECK(s.out.state == GV_ARMED && s.out.kind == GV_KIND_VOLUME);
-    sweep(&s, 0.0f, 2.0f, 0.25);
+    still(&s, &fixture_real_open_palm, 0.4);
+    sweep(&s, 0.0f, 1.2f, 0.3);
     still(&s, &fixture_real_open_palm, 0.3);
     CHECK(s.armed_frames > 0);
     CHECK(s.flicks == 0);
@@ -445,19 +585,25 @@ static void a_flick_never_fires_while_armed(void)
 int main(void)
 {
     fprintf(stderr, "test_flick\n");
-    RUN(a_fast_downward_open_palm_fires_once);
-    RUN(too_slow_does_not_fire);
-    RUN(not_far_enough_does_not_fire);
-    RUN(sideways_does_not_fire);
-    RUN(upward_does_not_fire);
-    RUN(a_closed_hand_sweeping_down_does_not_fire);
-    RUN(a_hand_that_opens_as_it_falls_does_not_fire);
-    RUN(a_hand_that_closes_as_it_falls_does_not_fire);
-    RUN(a_hand_that_shrinks_or_grows_while_falling_is_not_a_flick);
-    RUN(a_gap_in_tracking_breaks_the_sweep);
+    RUN(a_held_open_palm_then_a_drop_fires_once);
+    RUN(a_drop_with_no_hold_before_it_does_not_fire);
+    RUN(a_hand_lowered_slowly_instead_of_held_does_not_fire);
+    RUN(a_drop_slower_than_the_drop_window_does_not_fire);
+    RUN(a_drop_that_is_not_far_enough_does_not_fire);
+    RUN(sideways_after_a_hold_does_not_fire);
+    RUN(upward_after_a_hold_does_not_fire);
+    RUN(a_drop_that_ends_out_of_the_picture_does_not_fire);
+    RUN(a_drop_ending_in_a_fist_does_not_fire);
+    RUN(a_fist_held_still_then_dropped_does_not_fire);
+    RUN(a_half_open_hand_held_still_then_dropped_does_not_fire);
+    RUN(the_drop_is_measured_against_the_hand_as_it_was_held);
+    RUN(an_open_palm_held_still_and_left_there_never_fires);
+    RUN(a_hand_that_shrinks_as_it_drops_is_still_a_flick);
+    RUN(a_drop_that_ends_with_the_palm_blurred_still_fires);
+    RUN(a_gap_in_tracking_breaks_the_drop);
     RUN(just_after_letting_go_nothing_fires);
     RUN(a_second_flick_waits_for_the_refractory);
-    RUN(one_fall_fires_once_even_with_no_refractory);
+    RUN(one_drop_fires_once_even_with_no_refractory);
     RUN(a_flick_never_fires_while_armed);
     return TEST_SUMMARY();
 }

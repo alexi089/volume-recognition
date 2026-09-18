@@ -14,12 +14,16 @@
 
 #define GV_SCALE_HISTORY 32
 
-/* About half a second at 30 fps: comfortably longer than flick_window_sec, so
- * the whole span a flick is judged over is always in the buffer. Above about
- * 45 fps (16 frames inside 0.35 s) it no longer is, and the span truncates to
- * whatever the buffer holds - which can only SHRINK the fall measured across
- * it, so the gesture then fails towards not firing, never towards firing. */
-#define GV_FLICK_HISTORY 16
+/* One and a third seconds at 30 fps. The whole flick - the 0.25 s hold plus the
+ * 0.6 s drop window that follows it - is 0.85 s, so 26 frames would just cover
+ * it and 40 leaves half as much again in hand. Strictly only the drop window is
+ * walked (the hold's length is carried forward frame by frame in flick_prev,
+ * not recounted from the buffer), so the buffer is generous on purpose rather
+ * than exactly sized: above about 66 fps it stops covering even the drop window
+ * and the search truncates to whatever it holds - which can only LOSE the frame
+ * the drop would have been measured from, so the gesture then fails towards not
+ * firing, never towards firing. Raise it with the window. */
+#define GV_FLICK_HISTORY 40
 
 /* The longest frame gap the slew limit gives credit for: about three frames.
  * With max_slew = 2 that bounds any single step to 0.2 of the range. */
@@ -79,12 +83,21 @@ struct gv_ctx {
     int    scale_history_count;
 
     /* The flick (gesture.c). A ring buffer like scale_history above: every
-     * usable frame's palm centre, hand size and open-palm verdict, so that the
-     * moment the machine is idle the last half second of motion is already
-     * there to judge. x and y are in frame heights (see pose.h), so dividing
-     * either by `scale` gives hand-lengths. */
-    struct { double t; float x, y, scale; int open; } flick_hist[GV_FLICK_HISTORY];
+     * usable frame's palm centre, hand size, hand shape, how far down the
+     * picture the hand reached, and how long an open palm has been held nearly
+     * still ending at that frame - so that the moment the machine is idle the
+     * last second or so of motion is already there to judge. x, y and `low` are
+     * in frame heights (see pose.h), so dividing x or y by `scale` gives
+     * hand-lengths. `held` is in seconds and is negative on a frame that is not
+     * part of such a run. `fist` is asked only of the newest frame; it is not
+     * the negation of the open palm the hold wants (pose.h says why). */
+    struct { double t; float x, y, scale, low, held; int fist; } flick_hist[GV_FLICK_HISTORY];
     int    flick_next, flick_count;
+    /* The previous usable frame, kept OUT of the ring buffer: the hold's length
+     * is carried forward from one frame to the next, and clearing the ring when
+     * a flick fires must not restart a hold that is still going on. `valid` is
+     * 0 until the first usable frame (gv_create zeroes the context). */
+    struct { double t; float x, y, held; int valid; } flick_prev;
     double last_release_t;  /* when any gesture last let go (ARMING or ARMED -> IDLE) */
     double last_flick_t;    /* when a flick last fired */
 

@@ -210,6 +210,25 @@ int gv_pose_is_open_palm(const gv_frame *f, float aspect, const gv_pose_limits *
             gv_thumb_is_out(f, aspect, lim);
 }
 
+int gv_pose_is_fist(const gv_frame *f, float aspect, const gv_pose_limits *lim)
+{
+    if (!f->present)
+        return 0;
+    return gv_finger_is_curled(f, GV_FINGER_INDEX,  aspect, lim) &&
+           gv_finger_is_curled(f, GV_FINGER_MIDDLE, aspect, lim) &&
+           gv_finger_is_curled(f, GV_FINGER_RING,   aspect, lim) &&
+           gv_finger_is_curled(f, GV_FINGER_PINKY,  aspect, lim);
+}
+
+float gv_hand_lowest_y(const gv_frame *f)
+{
+    float low = f->lm[0].y;
+    for (int i = 1; i < GV_NUM_LANDMARKS; i++)
+        if (f->lm[i].y > low)
+            low = f->lm[i].y;
+    return low;
+}
+
 float gv_palm_x(const gv_frame *f, float aspect)
 {
     float sum = 0.0f;

@@ -112,8 +112,11 @@ def main() -> int:
               "the resize fields line up")
         check(abs(c.resize_rate_gain - 4.5) < 1e-6 and abs(c.win_write_interval_sec - 0.06) < 1e-6,
               "the resize fields line up")
-        check(abs(c.flick_travel - 1.5) < 1e-6, "the flick fields line up")
-        check(abs(c.flick_refractory_sec - 1.5) < 1e-6,
+        check(abs(c.flick_drop - 0.8) < 1e-6 and abs(c.flick_drop_window_sec - 0.6) < 1e-6,
+              "the flick fields line up")
+        check(abs(c.flick_edge_margin - 0.10) < 1e-6 and abs(c.flick_hold_sec - 0.25) < 1e-6,
+              "the flick's hold fields line up")
+        check(abs(c.flick_still_speed - 1.0) < 1e-6,
               "the config lines up down to the very last field")
     try:
         bridge.Gesture(aspect=aspect, gain=float("nan"))

@@ -95,10 +95,13 @@ class Config(C.Structure):
         ("resize_dead_zone", C.c_float),
         ("resize_rate_gain", C.c_float),
         ("win_write_interval_sec", C.c_float),
-        ("flick_travel", C.c_float),
-        ("flick_window_sec", C.c_float),
+        ("flick_drop", C.c_float),
+        ("flick_drop_window_sec", C.c_float),
         ("flick_max_sideways", C.c_float),
         ("flick_refractory_sec", C.c_float),
+        ("flick_edge_margin", C.c_float),
+        ("flick_hold_sec", C.c_float),
+        ("flick_still_speed", C.c_float),
     ]
 
 

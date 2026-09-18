@@ -23,7 +23,7 @@ Owner's proposals and the decisions taken (2026-09-17, in conversation):
 |---|---|
 | Faster, smoother resizing on the pinch | **Rate control** ("joystick"): finger offset from the arming gap sets the SPEED of the size change, not the size |
 | Open the hand to grow | **Dropped**: rate control grows too; opening the hand collides with "closing the hand releases" and with the open-palm negatives |
-| Swipe the window away to minimise | **Yes, an open palm swiped DOWN.** Sideways swipes stay reserved for the media gestures planned next |
+| Swipe the window away to minimise | **Yes, an open palm moved DOWN.** Sideways swipes stay reserved for the media gestures planned next. (Built as a bare swipe; became "hold the open palm still, then drop it" after two studies - see the flick section and the Findings) |
 
 ## Rate control for the pinch
 
@@ -67,36 +67,73 @@ rollback protects).
   after, on the live loop: the target is the camera loop back near 30 fps while
   a window moves. If throttling is not enough, the fallback is a writer thread.
 
-## Swipe down to minimise: a "flick"
+## Hold, then drop, to minimise: a "flick"
 
-A flick is a new class of gesture: it does not arm and hold, it **fires once**.
+A flick is a new class of gesture: it **fires once** instead of arming and
+running. It does hold a pose first, like the other two, but it never enters
+ARMED and has no state to leave - it is judged from a short history of the
+palm's motion while the machine is IDLE.
 
-- **Pose:** open palm: index, middle, ring and pinky extended and the thumb
-  out (`gv_pose_is_open_palm`, new, measured on `fixture_real_open_palm` and
-  the open-palm frames of the recordings).
-- **Motion:** over the last `flick_window_sec` (0.35 s) of frames, the palm
-  centre moved DOWN by at least `flick_travel` (1.5 hand-lengths in frame-height
-  units; no extra aspect factor - `gv_palm_x` already carries it and `gv_palm_y`
-  does not need it), with sideways travel at most `flick_max_sideways` (0.5)
-  times the downward travel; the open palm is present on the first and last
-  frame of that span, no frame in the span is missing for longer than the
-  release grace, **and the hand is the same size at both ends of the span - the
-  ratio of the two `gv_hand_scale` readings within
-  `gate_scale_min .. gate_scale_max` (0.7 - 1.4), the existing
-  plausibility gate, reused rather than given a constant of its own.** That last
-  condition was added after measurement, not designed in: it is what took the
-  negative corpus to zero (see Findings). A hand dropping out of the bottom of
-  the frame changes apparent size as it goes - the worst case in the recordings
-  grew 1.71x in a third of a second - while a hand swiped across the picture
-  keeps its size; and `flick_travel` is counted in hand-lengths, a unit that
-  means nothing when the hand was not the same size at each end.
+The shape changed after two studies (Findings below). It was first designed as
+a swipe: one downward motion of an open palm. That could not be made to work,
+because a swipe and a hand being put down are the same motion - the owner's own
+swipes measured 0.78 - 1.07 hand-lengths, and so does ordinary hand-lowering.
+The gesture now asks for a deliberate pause first, the way arming a volume slide
+or a resize already does: **hold the open palm still, then drop it.**
+
+- **The hold:** an open palm (`gv_pose_is_open_palm`) on every frame of a run
+  lasting at least `flick_hold_sec` (0.25 s), with the palm centre moving
+  slower than `flick_still_speed` (1.0 hand-lengths per second) between
+  consecutive frames. A tracking hole longer than `release_grace_sec` starts a
+  new run rather than continuing one: nothing is known about what the hand did
+  inside it. 0.25 s is what `arm_hold_sec` already asks of the other gestures;
+  on the recordings, runs under the 1.0 speed limit reach 0.9 - 1.7 s, so a
+  hand that is meant to be still clears it easily.
+- **The drop:** within `flick_drop_window_sec` (0.6 s) of any frame of that
+  hold, the palm centre at least `flick_drop` (0.8 hand-lengths, measured in
+  hand-lengths of the hand **as it was held**) below where it was held, with
+  sideways travel at most `flick_max_sideways` (0.5) times the drop. No extra
+  aspect factor - `gv_palm_x` already carries it and `gv_palm_y` does not need
+  it.
+- **At the end of the drop:** the hand must not be closed (`!gv_pose_is_fist`,
+  i.e. not all four fingers curled) and no landmark may have reached past
+  `1 - flick_edge_margin` (0.10) of the frame height (`gv_hand_lowest_y`;
+  MediaPipe keeps reporting landmarks outside 0..1 for a hand half out of
+  frame, so this is a margin inside a real picture, not a clamp).
+  The two ends are asked different questions on purpose: the hold wants a
+  confident open palm, the end of the drop only "not closed", because seven of
+  the sixteen downward open-palm motions in the first live session had lost the
+  open palm by their last sample (`open(old,new) = 1,0`) - fast motion blurs the
+  fingers out of a "long AND straight" reading - and only two of those seven had
+  actually closed the hand. The edge veto replaced an earlier rule requiring the
+  hand to be the same size at both ends: a drop swings the hand away from the
+  camera so a real one shrinks as it falls (measured 0.66, 0.68, 0.51, 0.24),
+  and that rule threw real ones away. Leaving the frame is the thing itself,
+  where a change of apparent size was only a symptom. Measured across the frames
+  of the motion each of the two corpus false flicks fired in, the lowest
+  landmark never came above 0.97 and 0.91 of the frame height; the deepest any
+  open-palm motion in the live session reached - leaving out two already outside
+  the frame - was 0.89.
 - **When:** only from IDLE, and at least `flick_refractory_sec` (1.5 - measured;
   with the motion rule alone the last non-gesture sweep in the recordings lands
   1.10 s after a release, and the original 1.0 let it through) after the
   previous flick AND after the previous release of any gesture. The second
   condition is deliberate: lowering the hand after a volume slide or a resize
   is a fast downward motion, often with the hand opening, and it must not
-  minimise the window just adjusted.
+  minimise the window just adjusted. One-shot: the history is cleared when it
+  fires, so one drop cannot fire twice.
+
+**Status of the four constants, stated plainly.** `flick_hold_sec`,
+`flick_still_speed`, `flick_drop` and `flick_drop_window_sec` are **proxies for
+the positive side**. Nobody has yet recorded a deliberate hold-then-drop, so
+nothing measures whether 0.25 s feels like a pause or 0.8 hand-lengths feels
+like a drop. In particular **the owner's own session contains no hold before any
+of its swipes and fires nothing at all under this rule** - it is a recording of
+the old gesture being attempted, not of this one. What IS measured is the
+negative side: zero fires on all eighteen recordings, about forty minutes of
+ordinary hand motion, at every setting of the four that was tried. A guided clip
+(`real_swipe_minimise`, Task 7) is the missing input.
+
 - **Output:** one frame with `kind = GV_KIND_MINIMIZE` (new), `changed = 1`,
   `state = IDLE`. Nothing arms.
 - **Backend:** `gv_window_ops` gains `minimize(void)`: take hold of the front
@@ -138,9 +175,13 @@ motion at 1.28 hand-lengths against the 1.5 threshold.
 `gv_config` (mirrored field by field in `app/bridge.py`, order verified by eye):
 `scale_max_slew` is replaced in place by `resize_rate_max`; appended at the
 end: `resize_dead_zone`, `resize_rate_gain`, `win_write_interval_sec`,
-`flick_travel`, `flick_window_sec`, `flick_max_sideways`,
-`flick_refractory_sec`. `gv_kind` gains `GV_KIND_MINIMIZE = 3`. `gv_output`
-and `gv_step_result` keep their layout.
+`flick_drop`, `flick_drop_window_sec`, `flick_max_sideways`,
+`flick_refractory_sec`, `flick_edge_margin`, `flick_hold_sec`,
+`flick_still_speed`. (The first two were built as `flick_travel` and
+`flick_window_sec`, and renamed in place when the gesture became hold-then-drop;
+the Findings below still use the old names where they describe what was measured
+at the time.) `gv_kind` gains `GV_KIND_MINIMIZE = 3`. `gv_output` and
+`gv_step_result` keep their layout.
 
 ## Testing
 
@@ -565,3 +606,228 @@ later." What the recording shows:
   without false positives; it needs the leaving-the-frame veto in place of the
   size rule, and then a labelled positive clip (`real_swipe_minimise`) against
   the corpus. Task 7's guided clips are the way; nothing was changed tonight.
+
+### Task 4b (tuning the flick to fire): the study, and why it stopped short
+
+The rule was changed as Task 4b's brief specified - the size-stability condition
+replaced by a leaving-the-frame veto, the end-of-span pose relaxed from "open
+palm" to "not a fist" - and then the window and travel were swept. **The rule
+change stands and the corpus gate still passes at zero. The window/travel
+tuning did not reach its bar and nothing was adopted from it.**
+
+The tool is `core/tools/tune_flick.c` (`make -C core build/tune_flick`), kept in
+the tree with its own how-to-run header. Two modes: `spans`, the probe that
+measures every downward open-palm motion in a recording, and `grid`, which
+sweeps the two constants through the real `gv_update` (no rule is reimplemented
+in it) and counts.
+
+#### The positives, and what they are worth
+
+`traces/real_rate_first_session.csv`, the owner's 7-minute session, replayed:
+**16 motions** where an open palm inside a 0.35 s window is followed by the palm
+centre at least 0.75 hand-lengths lower; runs of frames are one motion when no
+quiet gap of a whole window separates them. **15 of the 16 happen while the
+state machine is idle**, and only those can ever fire.
+
+These are **proxies, not labels**. No recording carries any record of what the
+owner meant, so "caught" below means "a fire landed on a motion this probe
+called a candidate", never "a swipe the owner intended was recognised". Looking
+at the 16 by eye, nine of them fall in one 11-second burst (117 - 128 s) around
+the two minimises that actually fired live, and the rest are scattered singles
+between resizes that are as likely to be a hand being lowered.
+
+The earlier probe reported **31** such spans. Reproduced here, that number comes
+from a probe with **no open-palm requirement at all**: at the same thresholds
+that gives 30 motions, and 14 of those 30 are a closed hand falling (all four
+fingers curled at the end), which no version of this gesture should ever fire
+on. The 16 above are the same measurement with the open palm required, and they
+are the honest denominator.
+
+#### The table
+
+Rows are `flick_window_sec`, columns `flick_travel`; each cell is
+**positives caught (of the 15 eligible) / false fires across all 18 corpus
+recordings**. Everything else is at the shipped defaults, with the edge veto and
+the relaxed end pose in place.
+
+At `flick_edge_margin` **0.08**:
+
+| window \ travel | 1.0 | 1.2 | 1.5 | 1.8 | 2.0 |
+|---|---|---|---|---|---|
+| 0.35 | 3 / 0 | 3 / 0 | **3 / 0** | 2 / 0 | 2 / 0 |
+| 0.45 | 4 / 2 | 4 / 1 | 3 / 0 | 3 / 0 | 2 / 0 |
+| 0.50 | 3 / 2 | 3 / 2 | 2 / 0 | 2 / 0 | 2 / 0 |
+| 0.60 | 3 / 2 | 3 / 1 | 3 / 1 | 3 / 1 | 3 / 0 |
+
+At `flick_edge_margin` **0.10** (shipped):
+
+| window \ travel | 1.0 | 1.2 | 1.5 | 1.8 | 2.0 |
+|---|---|---|---|---|---|
+| 0.35 | 3 / 0 | 3 / 0 | **3 / 0** | 2 / 0 | 2 / 0 |
+| 0.45 | 4 / 2 | 4 / 1 | 3 / 0 | 3 / 0 | 2 / 0 |
+| 0.50 | 3 / 2 | 3 / 2 | 2 / 0 | 2 / 0 | 2 / 0 |
+| 0.60 | 2 / 2 | 2 / 1 | 2 / 1 | 2 / 1 | 2 / 0 |
+
+At `flick_edge_margin` **0.12**:
+
+| window \ travel | 1.0 | 1.2 | 1.5 | 1.8 | 2.0 |
+|---|---|---|---|---|---|
+| 0.35 | 3 / 0 | 3 / 0 | **3 / 0** | 2 / 0 | 2 / 0 |
+| 0.45 | 3 / 2 | 3 / 1 | 2 / 0 | 2 / 0 | 2 / 0 |
+| 0.50 | 3 / 2 | 3 / 2 | 2 / 0 | 2 / 0 | 1 / 0 |
+| 0.60 | 2 / 2 | 2 / 1 | 2 / 1 | 2 / 1 | 2 / 0 |
+
+**The best cell at zero corpus fires catches 3 of 15.** The brief's tie-break
+(most positives, then the larger travel) picks window **0.35** and travel
+**1.5** at the shipped margin - which is exactly what already shipped. The
+window and travel were therefore left alone; the whole gain comes from the edge
+veto and the relaxed end pose.
+
+`flick_edge_margin` itself was picked from measurement, not from this table: at
+the frame each of the two corpus false flicks fired on, the hand's lowest
+landmark never came above **0.97** and **0.91** of the frame height, and the
+deepest any open-palm motion in the live session reached was **0.89**. 0.10 is
+the round number between 0.89 and 0.91. That is a 0.02 gap, and it is the
+weakest number in the rule.
+
+#### Before and after, on the same session
+
+| | live, old rule | new rule, replayed |
+|---|---|---|
+| fires in the 7-minute session | 2 (121.14 s, 125.65 s) | 3 (121.1, 125.6, 127.9 s) |
+| of the 15 eligible proxy motions | 2 | 3 |
+| false fires on the 18 recordings | 0 | 0 |
+
+#### The corpus, per recording (new rule, shipped defaults)
+
+`core/build/replay <file> stats`: **flicks 0** on every one of
+`take1/real_{cup_reach,nose_scratch,slide_down,slide_up,talking_hands,typing,waving}.csv`,
+`real_{first,second,third,fourth,fifth,resize_first,resize_second}_session.csv`
+and `probe_{pinch_move,pinch_open,pointing,volume_pose}.csv`. The gate holds.
+
+#### Why the window/travel sweep cannot do better - the measurement that matters
+
+The brief expected a longer window to measure MORE travel ("over a 0.5 s window
+the same swipes measure 1.4 - 2.2"). Measured against the rule as built, it
+measures **less**. The rule judges the two ENDS of the whole window, and half a
+second before a swipe the hand was not yet raised - so the oldest sample is
+already low, and the fall across the window shrinks or goes negative:
+
+| motion | fall over the whole window, 0.35 s | 0.45 s | 0.50 s | deepest fall from any open palm inside 0.35 s |
+|---|---|---|---|---|
+| 121.8 s | 0.81 | 0.05 | -0.28 | 4.01 (from a hand 3.1x smaller: see below) |
+| 123.2 s | 0.04 | -2.69 | -3.02 | 0.87 |
+| 125.6 s | 0.68 | 0.47 | 0.47 | 1.07 |
+| 126.5 s | 0.81 | -1.96 | -4.15 | 0.81 |
+| 127.8 s | 0.79 | 0.80 | 0.79 | 0.80 |
+| 159.9 s | 0.92 | 0.68 | 0.54 | 1.07 |
+
+Two things follow, and neither is a constant that can be tuned:
+
+1. **The owner's swipes are about 0.8 - 1.1 hand-lengths**, not 1.5. (Two
+   motions measure 2.7 - 4.0, but only because the open-palm frame they are
+   measured from is a hand 2 - 3x smaller than the one at the end, so
+   "hand-lengths" there means little.) The travel would have to come down to
+   about 0.8 to catch most of them.
+2. **Judging the whole window is what loses them.** The obvious alternative -
+   measure the deepest fall from ANY open palm inside the window, the last
+   column - is a different RULE, which this task's brief does not name, so it
+   was measured and not built.
+
+What that alternative would cost, measured (best sub-span at 0.8 hand-lengths,
+with the sideways limit, the not-a-fist end, the edge veto and idle-only all
+still applied, but before the refractory): **7 of the 16 positives, and 6
+candidate fires across 5 of the 18 corpus recordings** (`slide_up` 2,
+`first_session` 2, `talking_hands` 1, `fourth_session` 1). The refractory after
+release would remove some of those six, but not obviously all: the corpus gate
+is zero and this does not reach it.
+
+The one corpus recording that fires at the looser cells of the table is
+`real_second_session.csv` at 294.0 s: a hand sweeping down and across, which at
+one frame reads as a fall of 1.39 hand-lengths with only 0.59 sideways (inside
+the 0.5 x 1.39 = 0.70 allowance), still well inside the picture (lowest landmark
+0.69) and 1.5 s clear of any release. It is a genuine near-miss, not an artefact
+- the positive and negative populations overlap on this rule, as the previous
+session already suspected.
+
+#### Where this leaves the gesture
+
+Unchanged from the previous round in kind: the flick now fires on three of the
+fifteen proxy motions instead of two, still with a clean corpus. That is better
+than it was and it is not "works". Closing the rest needs either a rule the
+brief does not name (the best sub-span above, whose cost is measured here) or -
+the honest input - **a guided clip of deliberate swipes and deliberate
+non-swipes** (`real_swipe_minimise` and the negatives, Task 7), so that the word
+"positive" stops being a proxy.
+
+### Task 4b, part two: hold-then-drop measured, then chosen and built
+
+The window/travel table above is the whole of what tuning a bare swipe can do:
+3 of 15 proxy positives at zero corpus fires, with the tie-break landing back on
+the constants that already shipped. The reason it cannot do better is in the
+table under "Why the window/travel sweep cannot do better" - the swipes are
+0.78 - 1.07 hand-lengths and ordinary hand-lowering is the same size - so a
+different SHAPE was measured instead, and then chosen.
+
+**The variant:** an open palm held nearly still for `hold` seconds (open on
+every frame, palm centre moving slower than `still` hand-lengths per second),
+then within `drop_window` seconds a drop of at least `drop` hand-lengths below
+where it was held, sideways at most 0.5 x the drop, not a fist and inside the
+frame at the end. Refractory and IDLE-only as before.
+
+Each cell is **positives caught (of the 15 eligible) / fires across all 18
+corpus recordings**:
+
+| hold | still | drop_window | drop | caught | corpus fires |
+|---|---|---|---|---|---|
+| 0.2 | 0.5 | 0.5 | 0.6 / 0.8 / 1.0 | 0 / 15 | 0 |
+| 0.2 | 0.5 | 0.7 | 0.6 / 0.8 / 1.0 | 0 / 15 | 0 |
+| 0.2 | 1.0 | 0.5 | 0.6 / 0.8 / 1.0 | 0 / 15 | 0 |
+| 0.2 | 1.0 | 0.7 | 0.6 / 0.8 / 1.0 | 0 / 15 | 0 |
+| 0.3 | 0.5 | 0.5 | 0.6 / 0.8 / 1.0 | 0 / 15 | 0 |
+| 0.3 | 0.5 | 0.7 | 0.6 / 0.8 / 1.0 | 0 / 15 | 0 |
+| 0.3 | 1.0 | 0.5 | 0.6 / 0.8 / 1.0 | 0 / 15 | 0 |
+| 0.3 | 1.0 | 0.7 | 0.6 / 0.8 / 1.0 | 0 / 15 | 0 |
+
+Every cell: **nothing fires, on the positives and on the corpus alike.** The
+reason is the same in every one of them: **0 of the 15 eligible proxy positives
+had a 0.2 s (or 0.3 s) still-open hold within 0.7 s before them, at either speed
+limit; only 1 of the 15 had one anywhere in the 1.5 s before.** The owner raises
+his hand and swipes in one motion. He does not pause - and nothing had ever told
+him to.
+
+The zeros are not a broken detector. Still-open holds are common in these
+recordings, they simply never sit in front of a drop: 487 frames end a run of at
+least 0.2 s in the positives file alone (169 in `real_first_session`, 91 in
+`real_nose_scratch`), with the longest runs reaching 0.9 - 1.7 s.
+
+**The decision (owner, after seeing this):** build hold-then-drop. The evidence
+splits cleanly in two, and both halves matter:
+
+- **The negative side is as good as it gets.** Zero on 40 minutes of ordinary
+  hand motion at every setting tried, because a held open palm followed by a
+  drop does not happen by accident. The bare swipe never managed that without
+  also refusing the swipes.
+- **The positive side is untested, and this recording cannot test it.** It says
+  only that the owner does not *currently* pause. Whether pausing is comfortable
+  is a question for a guided clip recorded under the new instruction, not for
+  this one.
+
+Shipped constants: `flick_hold_sec` 0.25 (the same pause `arm_hold_sec` already
+asks for), `flick_still_speed` 1.0, `flick_drop` 0.8 (a little under the
+measured 0.78 - 1.07, which the hold now makes safe to ask for),
+`flick_drop_window_sec` 0.6. All four are proxies for the positive side.
+
+**Corpus, per recording, with hold-then-drop shipped** (`replay <file> stats`):
+**flicks 0** on all eighteen -
+`take1/real_{cup_reach,nose_scratch,slide_down,slide_up,talking_hands,typing,waving}.csv`,
+`real_{first,second,third,fourth,fifth,resize_first,resize_second}_session.csv`,
+`probe_{pinch_move,pinch_open,pointing,volume_pose}.csv` - and **0 on
+`real_rate_first_session.csv` too**, the owner's own session, which is said here
+rather than hidden: that recording holds sixteen attempts at the OLD gesture and
+not one hold, so the new rule is right to ignore it.
+
+The study tool stays in the tree at `core/tools/tune_flick.c`. Its `armdrop`
+mode is the reference this rule was built from, and it still checks itself
+against `gv_update` at the shipped constants on all nineteen recordings before
+printing anything.

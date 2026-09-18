@@ -63,7 +63,8 @@ typedef enum {
     GV_KIND_NONE     = 0, /* idle */
     GV_KIND_VOLUME   = 1, /* index and middle up: a slider for the system volume */
     GV_KIND_RESIZE   = 2, /* thumb and index out: pinch to resize the front window */
-    /* An open palm swiped down: minimise the front window. A one-shot - it
+    /* An open palm held still, then dropped: minimise the front window. A
+     * one-shot - it
      * never arms, so this kind appears on exactly one frame, with `changed`,
      * and the state on that frame is still IDLE. */
     GV_KIND_MINIMIZE = 3
@@ -171,25 +172,73 @@ typedef struct {
      * in the design doc. */
     float win_write_interval_sec;
 
-    /* The flick: an open palm swiped down, which minimises the front window.
-     * The POSE cannot carry this gesture - 46% of the talking-hands frames and
-     * 19% of the waving frames read as an open palm - so the motion does:
-     * inside flick_window_sec the palm centre must fall flick_travel
-     * hand-lengths, travelling sideways at most flick_max_sideways times as
-     * far, with the palm open at both ends of that span, no gap in tracking
-     * longer than release_grace_sec inside it, and the hand the same size at
-     * both ends - within gate_scale_min .. gate_scale_max, the gate above. That
-     * last condition has no constant of its own on purpose: it is the same
-     * "could this be one hand" test the armed gestures already trust, and it is
-     * what took the recordings to zero false flicks. */
-    float flick_travel;         /* hand-lengths the palm centre must fall ... */
-    float flick_window_sec;     /* ... and the span it has to fall them in    */
-    float flick_max_sideways;   /* sideways travel allowed, as a fraction of the fall */
+    /* The flick: an open palm HELD, then DROPPED, which minimises the front
+     * window. Two halves, because neither can carry it alone.
+     *
+     * The POSE cannot: 46% of the talking-hands frames and 19% of the waving
+     * frames read as an open palm, so a hand simply being open means nothing.
+     * The MOTION cannot either, which is what the first live session showed:
+     * the owner's own swipes covered 0.78 - 1.07 hand-lengths, and so does
+     * ordinary hand-lowering, so no threshold on "how far down, how fast"
+     * separates them - tuned for the swipes it fired on the recordings, tuned
+     * for the recordings it caught three swipes in seven minutes.
+     *
+     * So the gesture asks for a deliberate pause first, the way arming a volume
+     * slide or a resize does:
+     *
+     *   1. an open palm on every frame of a run lasting flick_hold_sec, with
+     *      the palm centre moving slower than flick_still_speed between
+     *      consecutive frames (a hole longer than release_grace_sec starts a
+     *      new run rather than continuing one: nothing is known about what the
+     *      hand did inside it);
+     *   2. within flick_drop_window_sec of any frame of that hold, the palm
+     *      centre at least flick_drop hand-lengths BELOW where it was held,
+     *      having travelled sideways at most flick_max_sideways times as far,
+     *      with the hand not a fist and no landmark past 1 - flick_edge_margin
+     *      of the frame height at that moment.
+     *
+     * The two ends are asked different questions on purpose. The hold wants a
+     * confident open palm; the end of the drop wants only "not closed", because
+     * seven of the sixteen downward open-palm motions in that live session had
+     * lost the open palm by their last sample - fast motion blurs the fingers
+     * out of a "long AND straight" reading - and only two of those seven had
+     * actually closed the hand.
+     *
+     * Status of the numbers: the NEGATIVE side is measured. Held-then-dropped
+     * fired nothing on any of the eighteen recordings - about forty minutes of
+     * ordinary hand motion - at any setting of the four constants that was
+     * tried, because a held open palm followed by a drop simply does not happen
+     * by accident. The POSITIVE side is not measured at all: nobody has yet
+     * recorded a deliberate hold-then-drop, so flick_hold_sec, flick_drop,
+     * flick_drop_window_sec and flick_still_speed are proxies until a guided
+     * clip exists. In particular the owner's own session contains no holds
+     * before its swipes and would fire nothing under this rule.
+     *
+     * What is NOT here, and why: no condition on the hand's apparent size
+     * changing across the drop. An earlier version had one, and a swipe down
+     * swings the hand away from the camera, so a real one shrinks as it falls
+     * (measured 0.66, 0.68, 0.51, 0.24) - the rule threw real swipes away.
+     * Leaving the frame is the thing itself; a change of size was a symptom. */
+    float flick_drop;           /* hand-lengths the palm centre must fall below where it was held ... */
+    float flick_drop_window_sec;/* ... and how long after the hold it has to do it in            */
+    float flick_max_sideways;   /* sideways travel allowed, as a fraction of the drop */
     /* Quiet time after the previous flick AND after any gesture let go. The
      * second half matters most: lowering the hand at the end of a slide or a
      * resize is itself a fast downward motion, often with the hand opening as
      * it goes, and it must not minimise the window just adjusted. */
     float flick_refractory_sec;
+    /* How much of the bottom of the picture counts as "on the way out", as a
+     * fraction of the frame height. MediaPipe reports landmarks outside 0..1
+     * for a hand half out of frame, so this is a real margin and not a
+     * clamp. Measured: across the frames of the motion each of the recordings'
+     * two false flicks fired in, the lowest landmark never came above 0.97 and
+     * 0.91 of the frame height, while the deepest any open-palm motion in the
+     * live session reached was 0.89. */
+    float flick_edge_margin;
+    /* The hold: how long the open palm must be held, and how fast the palm
+     * centre may drift while it is (hand-lengths per second). */
+    float flick_hold_sec;
+    float flick_still_speed;
 } gv_config;
 
 /* The tuned defaults. Start from these and override single fields. */
@@ -210,7 +259,8 @@ typedef struct gv_ctx gv_ctx;
  * that does not contain 1.0, or a non-positive resize rate; an axis dominance below
  * 1; accel_speed_hi not above accel_speed_lo; an edge margin outside
  * [0, 0.5) or a negative edge rate; curl limits above the extend limits; a scale gate that excludes 1.0;
- * a non-positive flick travel or window, or a negative flick sideways allowance or refractory)
+ * a non-positive flick drop, drop window, hold or still speed, a negative flick
+ * sideways allowance or refractory, or a flick edge margin outside 0 .. 0.5)
  * or if memory cannot be allocated. */
 gv_ctx *gv_create(const gv_config *cfg);
 

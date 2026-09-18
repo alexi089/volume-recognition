@@ -77,6 +77,12 @@ $(BUILD)/test_trace: tests/test_trace.c src/trace.c $(HDRS) | $(BUILD)
 $(BUILD)/replay: tools/replay.c src/trace.c src/verdict.c $(CORE_SRC) $(HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) tools/replay.c src/trace.c src/verdict.c $(CORE_SRC) -lm -o $@
 
+# The flick's tuning harness: the probe that measures real swipes and the
+# window x travel table. Not part of `make test` - it needs the untracked
+# recordings. See the header comment in tools/tune_flick.c for how to run it.
+$(BUILD)/tune_flick: tools/tune_flick.c src/trace.c $(CORE_SRC) $(HDRS) | $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) tools/tune_flick.c src/trace.c $(CORE_SRC) -lm -o $@
+
 # Writes the synthetic pinch traces into ../traces/ (they are committed; run this
 # only when the motion or the fixtures change).
 $(BUILD)/gen_pinch_traces: tools/gen_pinch_traces.c src/pose.c $(HDRS) | $(BUILD)

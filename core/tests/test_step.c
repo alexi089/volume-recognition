@@ -582,6 +582,21 @@ static void a_failing_write_is_reported_on_that_frame(void)
 
 /* --- the flick ----------------------------------------------------------- */
 
+/* Where a flick starts, in hand-lengths from the fixture photo's own position.
+ * The photo has the hand low in the picture, so a two hand-length drop from
+ * there ends past the bottom edge and the rule's edge veto (flick_edge_margin)
+ * refuses it - correctly, because that is a hand being taken away rather than
+ * dropped deliberately. These tests are about what the BACKEND does with a
+ * flick, so they start where a real one happens. test_flick.c's START_DY is the
+ * same number for the same reason.
+ *
+ * Every flick below begins with 0.4 s of `step_palm_still`, which is the HOLD:
+ * the gesture is an open palm held nearly still and then dropped, so a drop
+ * with no hold in front of it reaches no backend at all. test_flick.c owns the
+ * rule; these tests only need a flick that really fires. */
+#define FLICK_TOP (-2.5f)
+#define FLICK_BOTTOM (FLICK_TOP + 2.0f)
+
 /* The open palm, standing still `dy` hand-lengths below where it was recorded,
  * for `seconds`. */
 static void step_palm_still(gv_ctx *ctx, float dy, double seconds)
@@ -627,8 +642,8 @@ static void a_flick_minimises_the_front_window_once(void)
     fake_reset(0.40f);
     fake_settled_pending = 3; /* three frames of "not yet", then it is in the Dock */
     gv_ctx *ctx = start_real();
-    step_palm_still(ctx, 0.0f, 0.3);
-    step_palm_fall_until_flick(ctx, 0.0f, 2.0f, 0.25); /* two hand-lengths in a quarter second */
+    step_palm_still(ctx, FLICK_TOP, 0.4);   /* the hold */
+    step_palm_fall_until_flick(ctx, FLICK_TOP, 2.0f, 0.25); /* two hand-lengths in a quarter second */
 
     CHECK(flicks == 1);                    /* the core fired once ... */
     CHECK(fake_minimize_calls == 1);       /* ... and the backend heard it once */
@@ -640,17 +655,17 @@ static void a_flick_minimises_the_front_window_once(void)
 
     /* Three frames of waiting: asked once each, and pending is not an error. */
     for (int i = 1; i <= 3; i++) {
-        step_palm_still(ctx, 2.0f, DT);
+        step_palm_still(ctx, FLICK_BOTTOM, DT);
         CHECK(last.win == WIN_PENDING);
         CHECK(fake_settled_calls == i);
     }
     /* The frame it settles. */
-    step_palm_still(ctx, 2.0f, DT);
+    step_palm_still(ctx, FLICK_BOTTOM, DT);
     CHECK(last.win == WIN_OK);
     CHECK(fake_settled_calls == 4);
 
     /* And it is never asked again. */
-    step_palm_still(ctx, 2.0f, 0.5);
+    step_palm_still(ctx, FLICK_BOTTOM, 0.5);
     CHECK(fake_settled_calls == 4);
     CHECK(last.win == WIN_OK);
     CHECK(fake_minimize_calls == 1);
@@ -665,19 +680,19 @@ static void a_minimise_that_never_settles_is_reported_ignored(void)
     fake_settled_pending = 5;
     fake_settled_status = WIN_ERR_IGNORED;
     gv_ctx *ctx = start_real();
-    step_palm_still(ctx, 0.0f, 0.3);
-    step_palm_fall_until_flick(ctx, 0.0f, 2.0f, 0.25);
+    step_palm_still(ctx, FLICK_TOP, 0.4);   /* the hold */
+    step_palm_fall_until_flick(ctx, FLICK_TOP, 2.0f, 0.25);
     CHECK(flicks == 1 && flick_win == WIN_OK);
 
     for (int i = 1; i <= 5; i++) {
-        step_palm_still(ctx, 2.0f, DT);
+        step_palm_still(ctx, FLICK_BOTTOM, DT);
         CHECK(last.win == WIN_PENDING);
     }
-    step_palm_still(ctx, 2.0f, DT);
+    step_palm_still(ctx, FLICK_BOTTOM, DT);
     CHECK(last.win == WIN_ERR_IGNORED);
     CHECK(fake_settled_calls == 6);
 
-    step_palm_still(ctx, 2.0f, 0.3);
+    step_palm_still(ctx, FLICK_BOTTOM, 0.3);
     CHECK(fake_settled_calls == 6); /* the complaint is made once, not for ever */
     gv_destroy(ctx);
 }
@@ -688,11 +703,11 @@ static void a_failed_minimise_write_is_reported_on_that_frame_and_not_polled(voi
     fake_reset(0.40f);
     fake_minimize_status = WIN_ERR_NOT_TRUSTED;
     gv_ctx *ctx = start_real();
-    step_palm_still(ctx, 0.0f, 0.3);
-    step_palm_fall_until_flick(ctx, 0.0f, 2.0f, 0.25);
+    step_palm_still(ctx, FLICK_TOP, 0.4);   /* the hold */
+    step_palm_fall_until_flick(ctx, FLICK_TOP, 2.0f, 0.25);
     CHECK(flicks == 1);
     CHECK(flick_win == WIN_ERR_NOT_TRUSTED);
-    step_palm_still(ctx, 2.0f, 0.5);
+    step_palm_still(ctx, FLICK_BOTTOM, 0.5);
     CHECK(fake_settled_calls == 0); /* never asked whether a window that was not minimised has minimised */
     CHECK(last.win == WIN_OK);
     gv_destroy(ctx);
@@ -706,9 +721,9 @@ static void a_failed_minimise_is_reported_on_that_frame(void)
     fake_reset(0.40f);
     fake_minimize_status = WIN_ERR_NOT_TRUSTED;
     gv_ctx *ctx = start_real();
-    step_palm_still(ctx, 0.0f, 0.3);
-    step_palm_fall(ctx, 0.0f, 2.0f, 0.25);
-    step_palm_still(ctx, 2.0f, 0.5);
+    step_palm_still(ctx, FLICK_TOP, 0.4);   /* the hold */
+    step_palm_fall(ctx, FLICK_TOP, 2.0f, 0.25);
+    step_palm_still(ctx, FLICK_BOTTOM, 0.5);
 
     CHECK(flicks == 1 && fake_minimize_calls == 1);
     CHECK(flick_win == WIN_ERR_NOT_TRUSTED); /* on the frame that fired ... */
@@ -730,10 +745,10 @@ static void a_resize_armed_while_a_minimise_settles_keeps_its_own_status(void)
     fake_settled_pending = 1000;              /* still on its way throughout */
     fake_acquire_status = WIN_ERR_NOT_RESIZABLE;
     gv_ctx *ctx = start_real();
-    step_palm_still(ctx, 0.0f, 0.3);
-    step_palm_fall_until_flick(ctx, 0.0f, 2.0f, 0.25);
+    step_palm_still(ctx, FLICK_TOP, 0.4);   /* the hold */
+    step_palm_fall_until_flick(ctx, FLICK_TOP, 2.0f, 0.25);
     CHECK(flicks == 1 && flick_win == WIN_OK);
-    step_palm_still(ctx, 2.0f, DT);
+    step_palm_still(ctx, FLICK_BOTTOM, DT);
     CHECK(last.win == WIN_PENDING);           /* the asking has started ... */
 
     step_pinch(ctx, 0.0f, 0.0f, 0.5);         /* ... and now a resize arms on top of it */
