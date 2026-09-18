@@ -93,6 +93,21 @@ int main(int argc, char **argv)
     double armed_since = 0.0, last_t = 0.0;
     float prev_volume = START_VOLUME, biggest_step = 0.0f, travel = 0.0f;
 
+    /* Direction reversals between writes to the window: how often a resize
+     * write moved the opposite way from the write before it, over the whole
+     * trace (not per armed session - the measurement in the design spec was
+     * not session-aware either, and matching it is the point: this is the
+     * regression check for the jitter that motivated rate control). Computed
+     * the same way the spec's own analysis was: the sign of consecutive
+     * RELATIVE steps of the reported scale, on the frames a resize reported a
+     * change (a write), compared pairwise. */
+    int   resize_writes = 0;
+    int   resize_step_pairs = 0;
+    int   resize_reversals = 0;
+    float resize_prev_scale = 1.0f;
+    float resize_prev_step = 0.0f;
+    int   resize_have_prev_step = 0;
+
     /* A full row is about 700 characters. fgets never writes past the buffer;
      * if a line is longer it comes back in pieces, which is detected below by
      * the missing newline. */
@@ -141,6 +156,20 @@ int main(int argc, char **argv)
         if (out.changed && out.kind == GV_KIND_RESIZE) {
             seen.resize_changes++;
             seen.final_scale = out.scale;
+
+            if (resize_writes > 0) {
+                float step = out.scale / resize_prev_scale - 1.0f;
+                if (resize_have_prev_step) {
+                    resize_step_pairs++;
+                    if ((step > 0.0f && resize_prev_step < 0.0f) ||
+                        (step < 0.0f && resize_prev_step > 0.0f))
+                        resize_reversals++;
+                }
+                resize_prev_step = step;
+                resize_have_prev_step = 1;
+            }
+            resize_prev_scale = out.scale;
+            resize_writes++;
         }
         if (out.state == GV_ARMED && prev_state != GV_ARMED && out.kind == GV_KIND_RESIZE)
             resize_sessions++;
@@ -198,6 +227,9 @@ int main(int argc, char **argv)
                seen.volume_changes, travel, biggest_step);
         printf("  resize: %d of those sessions, %d changes, final scale %.2f\n", resize_sessions,
                seen.resize_changes, seen.final_scale);
+        printf("  resize: %d direction reversals between consecutive writes (%.0f%%)\n",
+               resize_reversals,
+               resize_step_pairs ? 100.0 * resize_reversals / resize_step_pairs : 0.0);
         free(sessions.sec);
         return 0;
     }

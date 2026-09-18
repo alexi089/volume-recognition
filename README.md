@@ -220,9 +220,11 @@ All constants are in `gv_default_config()` in `core/src/gesture.c`:
 | `pose.thumb_curl_reach` / `thumb_curl_straight` | 0.55 / 0.45 | falling below either calls it tucked in |
 | `pose.pinch_gap_min` | 0.73 | smallest fingertip gap, in hand-lengths, that may arm a resize (must be positive: the scale divides by it) |
 | `pose.thumb_clear_min` | 0.62 | how far the thumb tip must be from the curled fingers to arm a resize |
-| `scale_min` / `scale_max` | 0.25 / 4.0 | limits of one resize, relative to the window's size when it armed |
+| `scale_min` / `scale_max` | 0.1 / 10.0 | safety-net limits on one resize, relative to the window's size when it armed (the window's own screen and minimum-size clamps do the real limiting) |
 | `scale_dead_band` | 0.01 | smallest relative change written to the window |
-| `scale_max_slew` | 1.0 | fastest the scale may move, in doublings per second |
+| `resize_dead_zone` | 0.08 | fingertip-gap offset from the arming gap, relative, inside which nothing moves |
+| `resize_rate_gain` | 4.5 | octaves per second the scale moves, per unit of offset past the dead zone |
+| `resize_rate_max` | 2.0 /s | fastest the scale may move, in doublings per second, however far past the dead zone the offset sits |
 | `release_rollback_sec` | 0.3 | how far back a resize reaches for its final size when the hand closes (0 = off) |
 
 Four of them can be tried live without rebuilding:

@@ -141,15 +141,25 @@ typedef struct {
     float filter_beta;
     float filter_d_cutoff;
 
-    /* The resize gesture: the window scales by fingertip gap / gap at arming. */
+    /* The resize gesture: rate control, like a joystick. How far the fingertip
+     * gap sits from the gap at arming sets the SPEED of the size change, not
+     * the size itself; see gestures/resize.c. */
     float scale_min;         /* clamp, relative to the size at arming ...       */
     float scale_max;         /* ... must include 1.0                            */
     float scale_dead_band;   /* smallest relative change worth reporting        */
-    float scale_max_slew;    /* fastest the scale may move, in octaves (doublings) per second */
+    float resize_rate_max;   /* fastest the scale may move, octaves (doublings) per second */
     /* When a resize ends because the hand changed shape (not because it left),
      * the last moments are the closing motion, which drags the gap down. The
      * gesture ends at the scale it reported this long before its last good frame. */
     float release_rollback_sec;
+    /* Rate control (see the spec): offset = gap / gap_at_arm - 1. Inside
+     * +/- resize_dead_zone nothing moves; beyond it the scale moves at
+     * resize_rate_gain octaves/s per unit of offset past the dead zone, capped
+     * at resize_rate_max. 0.08 sits clear of the measured 2.3% jitter step;
+     * 4.5 and 2.0 give about one doubling per second at a 30% offset. All three
+     * are proxies until the guided clips exist. */
+    float resize_dead_zone;
+    float resize_rate_gain;
 } gv_config;
 
 /* The tuned defaults. Start from these and override single fields. */
@@ -167,7 +177,7 @@ typedef struct gv_ctx gv_ctx;
 /* cfg may be NULL for the defaults. Returns NULL if the config is invalid (a
  * non-finite field; a non-positive aspect, pose limit, gate, slew or filter cutoff;
  * a negative time, dead-band, axis lock distance or pinch gap; a scale range
- * that does not contain 1.0, or a non-positive scale slew; an axis dominance below
+ * that does not contain 1.0, or a non-positive resize rate; an axis dominance below
  * 1; accel_speed_hi not above accel_speed_lo; an edge margin outside
  * [0, 0.5) or a negative edge rate; curl limits above the extend limits; or a scale gate that excludes 1.0)
  * or if memory cannot be allocated. */

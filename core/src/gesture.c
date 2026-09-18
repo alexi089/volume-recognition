@@ -88,14 +88,20 @@ gv_config gv_default_config(void)
         .filter_min_cutoff = 1.0f,
         .filter_beta       = 4.0f,
         .filter_d_cutoff   = 1.0f,
-        .scale_min         = 0.25f,
-        .scale_max         = 4.0f,
+        .scale_min         = 0.1f,
+        .scale_max         = 10.0f,
         .scale_dead_band   = 0.01f,
-        /* One octave a second: a window may at most double or halve in a
-         * second, however wild the fingertip tracking gets. */
-        .scale_max_slew    = 1.0f,
+        /* Two octaves a second at most: a window may at most quadruple or drop
+         * to a quarter in a second, however far past the dead zone the fingers
+         * sit. See resize_dead_zone and resize_rate_gain below. */
+        .resize_rate_max   = 2.0f,
         /* A hand closes in 0.1 - 0.2 s; 0.3 s reaches back to before it started. */
         .release_rollback_sec = 0.3f,
+        /* 0.08 sits clear of the measured 2.3% jitter step; 4.5 gives about one
+         * doubling per second at a comfortable 30% finger offset. Proxies until
+         * the guided clips exist (see gesture.h). */
+        .resize_dead_zone  = 0.08f,
+        .resize_rate_gain  = 4.5f,
     };
     return cfg;
 }
@@ -136,8 +142,11 @@ static int config_is_valid(const gv_config *c)
     int scale_ok = c->scale_min > 0.0f && c->scale_min <= 1.0f &&
                    c->scale_max >= 1.0f && isfinite(c->scale_max) &&
                    c->scale_dead_band >= 0.0f && isfinite(c->scale_dead_band) &&
-                   c->scale_max_slew > 0.0f && isfinite(c->scale_max_slew) &&
-                   c->release_rollback_sec >= 0.0f && isfinite(c->release_rollback_sec);
+                   c->resize_rate_max > 0.0f && isfinite(c->resize_rate_max) &&
+                   c->release_rollback_sec >= 0.0f && isfinite(c->release_rollback_sec) &&
+                   c->resize_dead_zone >= 0.0f && c->resize_dead_zone < 1.0f &&
+                   isfinite(c->resize_dead_zone) &&
+                   c->resize_rate_gain >= 0.0f && isfinite(c->resize_rate_gain);
 
     return pose_ok && gate_ok && scale_ok &&
            c->aspect > 0.0f && isfinite(c->aspect) &&
@@ -169,6 +178,7 @@ gv_ctx *gv_create(const gv_config *cfg)
     ctx->y_filter = ctx->x_filter; /* same parameters; struct assignment copies them */
     ctx->gap_filter = ctx->x_filter;
     ctx->reported_scale = 1.0f;
+    ctx->scale_target = 1.0f;
     return ctx;
 }
 

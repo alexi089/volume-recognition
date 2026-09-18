@@ -84,8 +84,10 @@ class Config(C.Structure):
         ("scale_min", C.c_float),
         ("scale_max", C.c_float),
         ("scale_dead_band", C.c_float),
-        ("scale_max_slew", C.c_float),
+        ("resize_rate_max", C.c_float),
         ("release_rollback_sec", C.c_float),
+        ("resize_dead_zone", C.c_float),
+        ("resize_rate_gain", C.c_float),
     ]
 
 

@@ -142,3 +142,32 @@ and `gv_step_result` keep their layout.
 Media playlist gestures (next round); the open-hand grow gesture (dropped);
 the nose-scratch false arm (parked); Liquid Glass in the HUD (waits for
 macOS 26 and its SDK).
+
+## Findings
+
+Task 1 (rate control) is built. `replay`'s stats now print a reversal line:
+`resize: N direction reversals between consecutive writes (P%)`, computed the
+same way as the "Why" section's number above (sign change between consecutive
+relative steps of the reported scale, on the frames a resize reported a
+change), so the same file can be compared before and after.
+
+- **Before** (phone-style ratio, from "Why" above, on this same recording,
+  `traces/real_resize_second_session.csv`): 15% of 1,657 window writes
+  reversed direction.
+- **After** (rate control, `core/build/replay traces/real_resize_second_session.csv
+  stats`, same file): `resize: 131 direction reversals between consecutive
+  writes (9%)`, out of 1,405 writes.
+
+Honestly: this is a plausibility check, not proof. The recording was made
+under the OLD mapping, where the hands were steering a ratio (moving to reach
+a size and then stopping), not a rate (moving to set a speed and then holding
+still). Replaying it through the new arithmetic answers "does the same finger
+motion look less jittery under the new rule", which is encouraging (9% versus
+15%) but is not the same claim as "a person operating the rate-controlled
+gesture live produces fewer reversals" - that needs a new guided recording
+under rate control, which Task 1 does not include. The write count also
+differs from the spec's 1,657 (1,405 here); the 70-session count matches
+exactly, so this is the same recording, but the two counts most likely come
+from different measurement points (the original figure over actual backend
+writes through the pre-throttling glue, this one over the pure state
+machine's `changed` events) - the discrepancy was not run down further here.

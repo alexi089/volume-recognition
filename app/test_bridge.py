@@ -107,8 +107,10 @@ def main() -> int:
         check(abs(c.pose.extend_reach - 1.20) < 1e-6 and abs(c.gate_max_speed - 30.0) < 1e-6, "nested and later fields line up (struct layout)")
         check(abs(c.pose.thumb_clear_min - 0.62) < 1e-6 and abs(c.arm_hold_sec - 0.25) < 1e-6,
               "the last nested field and the first field after the nested struct line up")
-        check(abs(c.scale_min - 0.25) < 1e-6 and abs(c.scale_max_slew - 1.0) < 1e-6
+        check(abs(c.scale_min - 0.1) < 1e-6 and abs(c.resize_rate_max - 2.0) < 1e-6
               and abs(c.release_rollback_sec - 0.3) < 1e-6,
+              "the resize fields line up")
+        check(abs(c.resize_rate_gain - 4.5) < 1e-6,
               "the resize fields, down to the very last one, line up")
     try:
         bridge.Gesture(aspect=aspect, gain=float("nan"))

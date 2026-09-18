@@ -59,6 +59,10 @@ struct gv_ctx {
     gv_filter gap_filter;   /* smooths the thumb-to-index fingertip gap */
     float  gap_at_arm;      /* that gap, in hand-lengths, at the moment of arming */
     float  reported_scale;  /* last scale handed to the caller; 1.0 at arming */
+    /* The unrounded integrator rate control accumulates into; reported_scale
+     * only moves to match it once it has moved by scale_dead_band. The two
+     * agree again the instant either one is reset (arming, idle, rollback). */
+    float  scale_target;
     /* A short history of reported scales, for the rollback on release. A ring
      * buffer: a fixed array plus the index of the next slot to write, wrapping
      * round, so the newest GV_SCALE_HISTORY entries are always there and
