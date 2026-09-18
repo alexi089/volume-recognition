@@ -24,6 +24,11 @@ KIND_NAMES = {KIND_NONE: None, KIND_VOLUME: "volume", KIND_RESIZE: "resize",
               KIND_MINIMIZE: "minimize"}
 VOL_OK = 0
 WIN_OK = 0
+# win_status is 0 ok, NEGATIVE error, and one positive value: a minimise is
+# only written on the flick frame and confirmed on later ones (window.h), and
+# WIN_PENDING is the answer while the window is still on its way. Anything
+# below zero is a problem to report; this is not one.
+WIN_PENDING = 1
 WIN_ERR_AX = -5
 
 

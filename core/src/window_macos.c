@@ -21,6 +21,16 @@
  * window drops out of the window list, so the only way back to it is the
  * element win_minimize kept; that is what win_restore is for.
  *
+ * Minimising is also the one place where this file does NOT check its work on
+ * the spot. Measured here (Terminal and Slack): the write returns success in
+ * under a millisecond, the attribute read straight back still says false, the
+ * read 50 ms later times out because the app is busy animating, and it reads
+ * true about 0.57 s after the write. The caller is a 30 fps camera loop, and
+ * half a second of frozen preview is too much to pay for a status - so
+ * win_minimize returns as soon as the write is accepted and the checking moves
+ * to win_minimize_settled, one quick read per later frame until it knows. The
+ * verification is not dropped, only moved off the hot path.
+ *
  * Memory: Core Foundation objects are reference counted by hand. The rule is
  * in the function names: anything from a function with Copy or Create in its
  * name is ours and must be CFRelease'd; anything from a Get is borrowed and
@@ -39,32 +49,14 @@
  * a late resize is worth less than a frozen camera. */
 #define AX_TIMEOUT_SEC 0.25f
 
-/*
- * Minimising is not finished when the write returns, and this is how long to
- * wait for it before calling it a failure.
- *
- * Measured on this machine, on Terminal and on Slack: the write returns
- * kAXErrorSuccess in well under a millisecond, the attribute read straight
- * back still says false, the read 50 ms later TIMES OUT after the full
- * AX_TIMEOUT_SEC (kAXErrorCannotComplete: the app is busy animating its window
- * into the Dock and is not answering), and the attribute finally reads true
- * about 0.57 s after the write. A single read-back, which is what a resize can
- * afford, therefore reports every successful minimise as ignored - the first
- * by-hand run of `win minimize` did exactly that on a window that had in fact
- * minimised.
- *
- * So the read-back waits. One second is 1.75x the settling time measured, and
- * the full second is only ever spent on a window that will not minimise at
- * all. It IS a stall in the caller's thread, which for the live app is the
- * camera loop: about 0.6 s of dropped frames on the frame a flick fires. That
- * is the price of the status being true, and a flick fires at most once per
- * flick_refractory_sec.
- */
-#define MINIMIZE_SETTLE_SEC  1.0
-#define MINIMIZE_POLL_SEC    0.03
+/* How often win_restore looks to see whether the window is back. It is the one
+ * call here that waits, because nothing time-critical ever makes it: the
+ * deadline it waits to is WIN_SETTLE_DEADLINE_SEC, shared with the minimise. */
+#define RESTORE_POLL_SEC 0.03
 
 static AXUIElementRef g_window;          /* the held window, or NULL; owned (retained) */
 static AXUIElementRef g_minimised;       /* what win_minimize last put in the Dock; owned */
+static double         g_minimised_at;    /* when that write went in (monotonic seconds) */
 static win_rect       g_original;        /* its frame at win_acquire */
 static win_rect       g_current;         /* its frame as last read */
 static win_rect       g_visible;         /* the visible frame of its screen */
@@ -159,30 +151,6 @@ static double now_sec(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts); /* monotonic: unaffected by the clock being set */
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
-}
-
-/* Wait for kAXMinimized to become `want` (1 minimised, 0 not), up to
- * MINIMIZE_SETTLE_SEC. WIN_OK as soon as it does; WIN_ERR_IGNORED if the
- * deadline passes and the window is still the other way - it took the write
- * and did nothing, which some windows (panels, full-screen ones) do.
- *
- * A read that fails because the application is too busy to answer is "not
- * yet", not a failure: that timeout IS what the minimise animation looks like
- * from here. Any other Accessibility error is a real one and ends the wait. */
-static win_status wait_for_minimized(AXUIElementRef window, int want)
-{
-    const double deadline = now_sec() + MINIMIZE_SETTLE_SEC;
-    for (;;) {
-        int is = !want;
-        win_status status = read_bool(window, kAXMinimizedAttribute, &is);
-        if (status == WIN_OK && is == want)
-            return WIN_OK;
-        if (status != WIN_OK && g_last_ax_error != kAXErrorCannotComplete)
-            return status; /* read_bool put the AXError in g_last_ax_error */
-        if (now_sec() >= deadline)
-            return WIN_ERR_IGNORED;
-        usleep((useconds_t)(MINIMIZE_POLL_SEC * 1e6));
-    }
 }
 
 /* The display holding `centre`, minus its menu bar. The Dock is NOT taken off:
@@ -420,16 +388,34 @@ win_status win_minimize(void)
         return ax_failed(e);
     }
 
-    /* The write went through, so keep the element from here on, WHATEVER the
-     * read-back below then says. A minimised window is off the window list, so
-     * this is the only handle left on it - and the case where the read-back
-     * cannot confirm the window is exactly the case where someone needs a way
-     * to bring it back. */
+    /* The write went through, so keep the element and note the time. The window
+     * is on its way to the Dock, where the window list cannot find it again, so
+     * this is the only handle left on it; win_minimize_settled needs the clock
+     * to know when "not yet" has become "never". Nothing here waits. */
     if (g_minimised)
         CFRelease(g_minimised);
     g_minimised = window;
+    g_minimised_at = now_sec();
+    return WIN_OK;
+}
 
-    return wait_for_minimized(window, 1);
+win_status win_minimize_settled(void)
+{
+    if (g_minimised == NULL)
+        return WIN_ERR_NO_WINDOW;
+
+    int minimised = 0;
+    win_status status = read_bool(g_minimised, kAXMinimizedAttribute, &minimised);
+    if (status == WIN_OK && minimised)
+        return WIN_OK; /* it is in the Dock: done */
+
+    /* An application too busy to answer is what the animation looks like from
+     * out here, so that timeout means "not yet" like a plain false does. Any
+     * other Accessibility error is a real one and is reported as itself. */
+    if (status != WIN_OK && g_last_ax_error != kAXErrorCannotComplete)
+        return status; /* read_bool left the AXError in g_last_ax_error */
+
+    return now_sec() - g_minimised_at < WIN_SETTLE_DEADLINE_SEC ? WIN_PENDING : WIN_ERR_IGNORED;
 }
 
 win_status win_restore(void)
@@ -437,10 +423,30 @@ win_status win_restore(void)
     if (g_minimised == NULL)
         return WIN_ERR_NO_WINDOW;
 
+    win_status status = WIN_OK;
     AXError e = AXUIElementSetAttributeValue(g_minimised, kAXMinimizedAttribute, kCFBooleanFalse);
-    /* Coming back out of the Dock is the same animation in reverse, and reads
-     * back just as slowly, so it waits the same way. */
-    win_status status = e != kAXErrorSuccess ? ax_failed(e) : wait_for_minimized(g_minimised, 0);
+    if (e != kAXErrorSuccess) {
+        status = ax_failed(e);
+    } else {
+        /* Coming back out of the Dock is the same animation in reverse and
+         * reads back just as slowly. This one WAITS for it, unlike the
+         * minimise: no camera loop ever calls win_restore, and a way back that
+         * cannot say whether it worked would not be worth having. */
+        const double deadline = now_sec() + WIN_SETTLE_DEADLINE_SEC;
+        for (;;) {
+            int minimised = 1;
+            status = read_bool(g_minimised, kAXMinimizedAttribute, &minimised);
+            if (status == WIN_OK && !minimised)
+                break;
+            if (status != WIN_OK && g_last_ax_error != kAXErrorCannotComplete)
+                break;
+            if (now_sec() >= deadline) {
+                status = WIN_ERR_IGNORED;
+                break;
+            }
+            usleep((useconds_t)(RESTORE_POLL_SEC * 1e6));
+        }
+    }
 
     /* Let go whatever happened: one attempt at the way back is all this
      * offers, and a window that refused to come out of the Dock is not worth
@@ -476,6 +482,7 @@ const char *win_strerror(win_status s)
 {
     switch (s) {
     case WIN_OK:                return "ok";
+    case WIN_PENDING:           return "not yet: the window is still on its way";
     case WIN_ERR_NOT_TRUSTED:   return "not allowed to control windows: add the app that launched this "
                                        "(Terminal, VS Code, ...) under System Settings > Privacy & Security > Accessibility";
     case WIN_ERR_NO_WINDOW:     return "no window to work on";

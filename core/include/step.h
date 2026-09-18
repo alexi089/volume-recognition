@@ -28,8 +28,12 @@ typedef struct {
     void       (*release)(void);
     /* Minimise the front window. Unlike the three above it takes its own hold
      * and lets go again inside the call: a flick is over in one frame, so
-     * there is nothing for the glue to keep. */
+     * there is nothing for the glue to keep. Returns as soon as the write is
+     * accepted - the window has not gone anywhere yet. */
     win_status (*minimize)(void);
+    /* Has it gone yet? Asked once a frame after a minimise, until it answers
+     * anything but WIN_PENDING. Never blocks. */
+    win_status (*minimize_settled)(void);
 } gv_window_ops;
 
 typedef struct {
@@ -38,7 +42,8 @@ typedef struct {
 } gv_backends;
 
 /* The real ones: { { vol_get, vol_set },
- *                  { win_acquire, win_apply, win_release, win_minimize } }. */
+ *                  { win_acquire, win_apply, win_release, win_minimize,
+ *                    win_minimize_settled } }. */
 extern const gv_backends gv_system_backends;
 
 typedef struct {
@@ -65,7 +70,15 @@ typedef struct {
  *            written at once, whatever the interval.
  *   minimise: on the one frame a flick fires, minimise the front window. The
  *            backend takes its own hold, so nothing is acquired or released
- *            around it, and the status is on that frame's result alone.
+ *            around it. The write is only the beginning: a window takes about
+ *            half a second to reach the Dock, far too long to wait for inside
+ *            a camera loop, so the checking is spread over the frames that
+ *            follow. `win` therefore reads, across a successful flick:
+ *            WIN_OK on the flick frame (the write was accepted), WIN_PENDING
+ *            on each frame while the window is still on its way, and WIN_OK
+ *            once more - or WIN_ERR_IGNORED - on the frame it settles. After
+ *            that the asking stops. A flick whose WRITE fails reports that
+ *            error on the flick frame and is never asked about again.
  */
 gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *backends);
 

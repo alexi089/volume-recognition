@@ -43,10 +43,13 @@ static vol_status fake_set(float v)
 static win_status fake_acquire_status;
 static win_status fake_apply_status;
 static win_status fake_minimize_status;
+static win_status fake_settled_status;  /* what minimize_settled says once it stops stalling */
+static int        fake_settled_pending; /* ... after this many WIN_PENDING answers */
 static int        fake_acquire_calls;
 static int        fake_apply_calls;
 static int        fake_release_calls;
 static int        fake_minimize_calls;
+static int        fake_settled_calls;
 static float      fake_last_scale;
 static int        fake_applies_after_release; /* a write to a window already let go is a bug */
 static int        fake_window_held;
@@ -82,8 +85,20 @@ static win_status fake_minimize(void)
     return fake_minimize_status;
 }
 
+/* The real backend answers WIN_PENDING for as long as the window is still on
+ * its way to the Dock, so the fake does too: the first fake_settled_pending
+ * calls stall, and the one after that gives the verdict. */
+static win_status fake_minimize_settled(void)
+{
+    fake_settled_calls++;
+    if (fake_settled_calls <= fake_settled_pending)
+        return WIN_PENDING;
+    return fake_settled_status;
+}
+
 static const gv_backends fake_ops = { { fake_get, fake_set },
-                                      { fake_acquire, fake_apply, fake_release, fake_minimize } };
+                                      { fake_acquire, fake_apply, fake_release, fake_minimize,
+                                        fake_minimize_settled } };
 
 /* What the flick driver (step_frame, below) counts. Declared up here because
  * fake_reset zeroes them, and in C a name has to exist before it is used. */
@@ -103,7 +118,10 @@ static void fake_reset(float volume)
     fake_acquire_status = WIN_OK;
     fake_apply_status = WIN_OK;
     fake_minimize_status = WIN_OK;
+    fake_settled_status = WIN_OK;
+    fake_settled_pending = 0; /* settles at once unless a test says otherwise */
     fake_acquire_calls = fake_apply_calls = fake_release_calls = fake_minimize_calls = 0;
+    fake_settled_calls = 0;
     fake_last_scale = -1.0f;
     fake_applies_after_release = 0;
     fake_window_held = 0;
@@ -587,20 +605,96 @@ static void step_palm_fall(gv_ctx *ctx, float dy0, float dy_hands, double second
     }
 }
 
+/* The same fall, stopped ON the frame the flick fires. The flick fires part
+ * way down, not on the last frame, so a test about what happens on the frames
+ * AFTER it has to start counting there rather than wherever the fall ends. */
+static void step_palm_fall_until_flick(gv_ctx *ctx, float dy0, float dy_hands, double seconds)
+{
+    int n = (int)(seconds / DT + 0.5);
+    for (int i = 1; i <= n; i++) {
+        gv_frame f = moved(&fixture_real_open_palm, 0.0f, dy0 + dy_hands * (float)i / (float)n);
+        step_frame(ctx, &f);
+        if (flick_on_last_frame)
+            return;
+    }
+}
+
+/* The whole of a successful flick, frame by frame: the write on the flick
+ * frame, then one question per frame while the window is on its way, then the
+ * verdict, then silence. */
 static void a_flick_minimises_the_front_window_once(void)
 {
     fake_reset(0.40f);
+    fake_settled_pending = 3; /* three frames of "not yet", then it is in the Dock */
     gv_ctx *ctx = start_real();
     step_palm_still(ctx, 0.0f, 0.3);
-    step_palm_fall(ctx, 0.0f, 2.0f, 0.25); /* two hand-lengths in a quarter second */
-    step_palm_still(ctx, 2.0f, 0.5);       /* and rests where it landed */
+    step_palm_fall_until_flick(ctx, 0.0f, 2.0f, 0.25); /* two hand-lengths in a quarter second */
 
     CHECK(flicks == 1);                    /* the core fired once ... */
     CHECK(fake_minimize_calls == 1);       /* ... and the backend heard it once */
     CHECK(fake_acquire_calls == 0);        /* minimising takes its own hold, inside the backend */
     CHECK(fake_apply_calls == 0 && fake_release_calls == 0);
-    CHECK(flick_win == WIN_OK);
+    CHECK(flick_win == WIN_OK);            /* the write took; the window has not moved yet */
     CHECK(fake_set_calls == 0);            /* a flick is not a volume change either */
+    CHECK(fake_settled_calls == 0);        /* nothing is asked on the frame that wrote */
+
+    /* Three frames of waiting: asked once each, and pending is not an error. */
+    for (int i = 1; i <= 3; i++) {
+        step_palm_still(ctx, 2.0f, DT);
+        CHECK(last.win == WIN_PENDING);
+        CHECK(fake_settled_calls == i);
+    }
+    /* The frame it settles. */
+    step_palm_still(ctx, 2.0f, DT);
+    CHECK(last.win == WIN_OK);
+    CHECK(fake_settled_calls == 4);
+
+    /* And it is never asked again. */
+    step_palm_still(ctx, 2.0f, 0.5);
+    CHECK(fake_settled_calls == 4);
+    CHECK(last.win == WIN_OK);
+    CHECK(fake_minimize_calls == 1);
+    gv_destroy(ctx);
+}
+
+/* A window that takes the write and never actually minimises: the backend says
+ * so once its deadline passes, and that verdict reaches the frame it lands on. */
+static void a_minimise_that_never_settles_is_reported_ignored(void)
+{
+    fake_reset(0.40f);
+    fake_settled_pending = 5;
+    fake_settled_status = WIN_ERR_IGNORED;
+    gv_ctx *ctx = start_real();
+    step_palm_still(ctx, 0.0f, 0.3);
+    step_palm_fall_until_flick(ctx, 0.0f, 2.0f, 0.25);
+    CHECK(flicks == 1 && flick_win == WIN_OK);
+
+    for (int i = 1; i <= 5; i++) {
+        step_palm_still(ctx, 2.0f, DT);
+        CHECK(last.win == WIN_PENDING);
+    }
+    step_palm_still(ctx, 2.0f, DT);
+    CHECK(last.win == WIN_ERR_IGNORED);
+    CHECK(fake_settled_calls == 6);
+
+    step_palm_still(ctx, 2.0f, 0.3);
+    CHECK(fake_settled_calls == 6); /* the complaint is made once, not for ever */
+    gv_destroy(ctx);
+}
+
+/* A write that fails outright has nothing to wait for. */
+static void a_failed_minimise_write_is_reported_on_that_frame_and_not_polled(void)
+{
+    fake_reset(0.40f);
+    fake_minimize_status = WIN_ERR_NOT_TRUSTED;
+    gv_ctx *ctx = start_real();
+    step_palm_still(ctx, 0.0f, 0.3);
+    step_palm_fall_until_flick(ctx, 0.0f, 2.0f, 0.25);
+    CHECK(flicks == 1);
+    CHECK(flick_win == WIN_ERR_NOT_TRUSTED);
+    step_palm_still(ctx, 2.0f, 0.5);
+    CHECK(fake_settled_calls == 0); /* never asked whether a window that was not minimised has minimised */
+    CHECK(last.win == WIN_OK);
     gv_destroy(ctx);
 }
 
@@ -620,6 +714,7 @@ static void a_failed_minimise_is_reported_on_that_frame(void)
     CHECK(flick_win == WIN_ERR_NOT_TRUSTED); /* on the frame that fired ... */
     CHECK(win_after_flick == WIN_OK);        /* ... and gone by the next one */
     CHECK(last.win == WIN_OK);
+    CHECK(fake_settled_calls == 0);          /* a failed write is not waited on */
     gv_destroy(ctx);
 }
 
@@ -684,6 +779,8 @@ int main(void)
     RUN(a_window_that_cannot_be_taken_is_reported_and_left_alone);
     RUN(a_failing_write_is_reported_on_that_frame);
     RUN(a_flick_minimises_the_front_window_once);
+    RUN(a_minimise_that_never_settles_is_reported_ignored);
+    RUN(a_failed_minimise_write_is_reported_on_that_frame_and_not_polled);
     RUN(a_failed_minimise_is_reported_on_that_frame);
     RUN(a_volume_slide_never_touches_the_window);
     return TEST_SUMMARY();

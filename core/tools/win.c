@@ -4,7 +4,8 @@
  *   win get            print the front window's app, frame and screen
  *   win scale 0.9      resize it to 0.9x about its centre, wait a second, put it back
  *   win bench          60 small resizes and back, to time one win_apply call
- *   win minimize       minimise it, wait a second, bring it back
+ *   win minimize       minimise it, wait for it to land, hold it there a
+ *                      second, bring it back
  *   win restore        bring back the window THIS process minimised - which, in a
  *                      fresh run, is none: a minimised window is off the window
  *                      list, so only the process that put it there can find it
@@ -45,12 +46,21 @@ static void print_frame(const char *label)
         printf("%-10s %.0f x %.0f at %.0f, %.0f\n", label, r.w, r.h, r.x, r.y);
 }
 
+static double now_sec(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
 /* Minimise the front window, leave it in the Dock long enough for whoever ran
- * this to see it happen, and put it back. Both statuses are printed: each one
- * is what window.h read BACK off the window after waiting for it, and a
- * minimise that reports success and does nothing is exactly what this is here
- * to catch. Each call takes about 0.6 s of that waiting on its own, so the
- * window is off the screen for a second and a half or so, not one second. */
+ * this to see it happen, and put it back.
+ *
+ * The write returns before the window has gone anywhere, so this does by hand
+ * what the camera loop does frame by frame: ask win_minimize_settled every
+ * 50 ms until it stops saying "not yet", and print how long that took. A
+ * minimise that reports success and then does nothing is exactly what the
+ * asking is here to catch. */
 static int minimize_and_back(void)
 {
     win_status s = win_minimize();
@@ -59,7 +69,20 @@ static int minimize_and_back(void)
      * purpose, since no window is held for resizing (see window.h). */
     win_target_name(name, sizeof name);
     printf("target     %s\n", name);
-    printf("minimized  %s\n", win_strerror(s));
+    printf("written    %s\n", win_strerror(s));
+
+    if (s == WIN_OK) {
+        double t0 = now_sec();
+        win_status settled = WIN_PENDING;
+        while (settled == WIN_PENDING) {
+            settled = win_minimize_settled();
+            printf("  %5.0f ms  %s\n", (now_sec() - t0) * 1e3, win_strerror(settled));
+            if (settled == WIN_PENDING)
+                usleep(50000);
+        }
+        s = settled;
+        printf("settled    %s after %.0f ms\n", win_strerror(s), (now_sec() - t0) * 1e3);
+    }
 
     sleep(1);
     /* The way back is tried even when the minimise complained: the complaint
@@ -73,13 +96,6 @@ static int minimize_and_back(void)
     if (r != WIN_OK)
         return fail("restore", r);
     return 0;
-}
-
-static double now_sec(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
 int main(int argc, char **argv)

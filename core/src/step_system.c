@@ -9,7 +9,7 @@
 /* A function's name, used without calling it, is a pointer to that function. */
 const gv_backends gv_system_backends = {
     { vol_get, vol_set },
-    { win_acquire, win_apply, win_release, win_minimize },
+    { win_acquire, win_apply, win_release, win_minimize, win_minimize_settled },
 };
 
 gv_step_result gv_step_system(gv_ctx *ctx, const gv_frame *frame)

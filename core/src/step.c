@@ -75,14 +75,26 @@ gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *ba
         ctx->step_window_held = 0; /* step_acquire_status is only read while active, and set afresh then */
     }
 
-    /*    Minimise: a flick fires on one frame and is over, so this is the
-     *    whole of it - no state to arm, nothing to hold, nothing to let go.
-     *    The backend finds the front window itself. Checking the kind as well
-     *    as `changed` matters here in a way it does not inside the resize
-     *    block above: this runs on every frame, including the ones where the
-     *    `changed` on the result belongs to a volume slide or a resize. */
-    if (r.out.kind == GV_KIND_MINIMIZE && r.out.changed)
+    /*    Minimise: a flick fires on one frame and is over, so the gesture has
+     *    no state to arm, nothing to hold and nothing to let go. The backend
+     *    finds the front window itself. Checking the kind as well as `changed`
+     *    matters here in a way it does not inside the resize block above: this
+     *    runs on every frame, including the ones where the `changed` on the
+     *    result belongs to a volume slide or a resize. */
+    if (r.out.kind == GV_KIND_MINIMIZE && r.out.changed) {
         r.win = window->minimize();
+        /* The write is accepted long before the window reaches the Dock (about
+         * half a second), and waiting for it here would freeze the camera. So
+         * the question "did it actually go?" is carried into the frames that
+         * follow. Only a write that succeeded has anything to wait for. */
+        ctx->step_minimise_pending = (r.win == WIN_OK);
+    } else if (ctx->step_minimise_pending) {
+        r.win = window->minimize_settled();
+        /* WIN_PENDING is the one answer that means "ask me again"; anything
+         * else, good or bad, is the end of it. */
+        if (r.win != WIN_PENDING)
+            ctx->step_minimise_pending = 0;
+    }
 
     return r;
 }

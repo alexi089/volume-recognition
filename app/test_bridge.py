@@ -135,6 +135,8 @@ def main() -> int:
     # call must say so rather than hand back a stale or empty success.
     check(bridge.win_strerror(-3) == "the front window has a fixed size", "window status codes map to text")
     check("Accessibility" in bridge.win_strerror(-1), "the not-trusted text says where to allow it")
+    # The one positive status: a minimise that has not landed yet is not an error.
+    check("not yet" in bridge.win_strerror(bridge.WIN_PENDING), "pending reads as not-yet, not as a failure")
     status, name = bridge.win_target_name()
     check(status == -2 and name == "", "no window is held outside a resize")
 

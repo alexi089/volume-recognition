@@ -76,9 +76,16 @@ int win_write_was_ignored(win_rect before, win_rect want, win_rect after, int re
 #define WIN_MIN_W 320.0
 #define WIN_MIN_H 240.0
 
-/* Same shape as vol_status: zero is success, negatives are errors. */
+/*
+ * Nearly the same shape as vol_status: zero is success, negatives are errors -
+ * and there is now one POSITIVE value, which is neither. Minimising is not
+ * finished when the write returns (see win_minimize), so "not yet" is a real
+ * answer and must not read as failure: anything < 0 is a problem to report,
+ * WIN_PENDING means ask again on the next frame.
+ */
 typedef enum {
     WIN_OK                 =  0,
+    WIN_PENDING            =  1, /* not yet: the window is still on its way (win_minimize_settled) */
     WIN_ERR_NOT_TRUSTED    = -1, /* this process may not use the Accessibility API; see win_strerror */
     WIN_ERR_NO_WINDOW      = -2, /* nothing to resize: no front window, or the one held has closed */
     WIN_ERR_NOT_RESIZABLE  = -3, /* the front window's size cannot be set (fixed-size windows) */
@@ -106,28 +113,52 @@ win_status win_apply(float scale);
  * minimised by win_minimize is not let go: see win_restore. */
 void win_release(void);
 
-/* Minimise the front window - the same one win_acquire would take, by the same
- * rule, except that a window whose size is fixed is minimised happily. Nothing
- * is held afterwards, and nothing needs to be: unlike a resize, this is one
- * write and the gesture is over.
+/*
+ * How long a minimise is given to actually happen before it counts as ignored.
  *
- * BLOCKS, typically for about 0.6 s and at most about a second. The write
- * returns long before the window has gone anywhere, and this waits for the
- * "minimized" attribute to say so, because a write that returns success and
- * does nothing is the failure worth reporting (WIN_ERR_IGNORED). The reason
- * the wait is that long, measured, is in window_macos.c.
+ * Measured on this machine, on Terminal and on Slack: the write returns
+ * kAXErrorSuccess in well under a millisecond, the attribute read straight back
+ * still says false, the read 50 ms later times out after the full messaging
+ * timeout (the app is busy animating its window into the Dock), and it finally
+ * reads true about 0.57 s after the write. One second is that, with margin.
+ */
+#define WIN_SETTLE_DEADLINE_SEC 1.0
+
+/* Minimise the front window - the same one win_acquire would take, by the same
+ * rule, except that a window whose size is fixed is minimised happily.
+ *
+ * RETURNS AT ONCE, and WIN_OK here means only that the WRITE was accepted: the
+ * window will not have gone anywhere yet. Verifying it is win_minimize_settled's
+ * job, on a later frame, and the split exists because the wait is ~0.57 s and
+ * the caller is a 30 fps camera loop - half a second of frozen preview and HUD
+ * is too high a price for a status.
  *
  * It does NOT disturb a resize in progress: win_acquire's window and this one
  * are kept apart. */
 win_status win_minimize(void);
 
-/* Un-minimise the window win_minimize last minimised, and forget it. Blocks
- * the same way, and for the same reason. The way
- * back for the command-line tool and for a probe; no gesture calls it. A
- * minimised window is gone from the screen and from the window list, so the
- * only handle on it is the one win_minimize kept - which means this only ever
- * works inside the same process, and only until the next win_minimize.
- * WIN_ERR_NO_WINDOW if nothing was minimised (or it has already been restored). */
+/* Did the last win_minimize actually take? Reads the attribute back ONCE and
+ * returns immediately:
+ *
+ *   WIN_OK           the window is minimised. Done; stop asking.
+ *   WIN_PENDING      not yet, and there is still time (WIN_SETTLE_DEADLINE_SEC
+ *                    since the write). Ask again on the next frame. A read that
+ *                    times out counts as this: the application being too busy
+ *                    to answer IS what the minimise animation looks like.
+ *   WIN_ERR_IGNORED  the deadline passed and the window is still where it was.
+ *   WIN_ERR_NO_WINDOW  nothing has been minimised (or it was restored).
+ *
+ * Safe to call as often as a caller likes; it never blocks for longer than one
+ * Accessibility call's timeout. */
+win_status win_minimize_settled(void);
+
+/* Un-minimise the window win_minimize last minimised, and forget it. The way
+ * back for the command-line tool and for a probe; no gesture calls it, which is
+ * why this one is allowed to block until the window is back. A minimised window
+ * is gone from the screen and from the window list, so the only handle on it is
+ * the one win_minimize kept - which means this only ever works inside the same
+ * process, and only until the next win_minimize. WIN_ERR_NO_WINDOW if nothing
+ * was minimised (or it has already been restored). */
 win_status win_restore(void);
 
 /* The held window's frame as last read (after win_acquire or win_apply). */

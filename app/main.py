@@ -309,7 +309,10 @@ class ErrorLatch:
 def describe_problem(step, target: str):
     """None, or (headline, detail) for the banner; the detail also goes to the HUD.
     The C side decided something failed; this only puts it into words."""
-    if step.win != bridge.WIN_OK:
+    # Only NEGATIVE win_status values are failures: bridge.WIN_PENDING (1) is a
+    # minimise still on its way to the Dock, which is normal for about half a
+    # second after a flick and must not raise a banner.
+    if step.win < 0:
         text = bridge.win_strerror(step.win)
         if step.win == bridge.WIN_ERR_AX:  # the raw code is what a bug report needs
             text += f" [AXError {bridge.win_last_ax_error()}]"

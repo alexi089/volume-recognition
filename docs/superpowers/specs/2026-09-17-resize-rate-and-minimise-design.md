@@ -390,29 +390,27 @@ clip exists - Task 7. `flick_travel`, `flick_window_sec` and
 `flick_max_sideways` remain proxies from this spec; only the refractory and the
 size condition are measured, and they are measured against negatives only.
 
-### Task 5 (the backend): the flick reaches the window, and the read-back had to learn to wait
+### Task 5 (the backend): the flick reaches the window, and the checking moved off the hot path
 
-`gv_window_ops` gains `minimize()`, wired to a new `win_minimize` that takes
-the front window by the resize's rule (minus the resizable check - fixed-size
-windows minimise perfectly well), writes `kAXMinimized`, confirms it, and keeps
-the element for `win_restore`, the way back for the command-line tool. The glue
-calls it on the one frame a flick fires. `win minimize` and `win restore` are
-new subcommands of `core/build/win`.
+`gv_window_ops` gains `minimize()` and `minimize_settled()`, wired to a new
+`win_minimize` / `win_minimize_settled` pair that takes the front window by the
+resize's rule (minus the resizable check - fixed-size windows minimise perfectly
+well) and keeps the element for `win_restore`, the way back for the command-line
+tool. The glue calls the first on the one frame a flick fires. `win minimize`
+and `win restore` are new subcommands of `core/build/win`.
 
-**By-hand check (a), `core/build/win minimize`: it failed the first time, and
-the failure was in the check, not the window.** The tool reported
+**A minimise is not finished when the write returns.** The first by-hand run of
+`core/build/win minimize` reported
 
 ```
 win: minimize: the window accepted the change and did not change ...
 target     Slack
 ```
 
-on a window that had in fact minimised: Slack was gone from the on-screen
-window list straight afterwards, and its `kAXMinimized` read `true`. (It was
-put back by hand; nothing was left in the Dock.) The spec's Backend bullet says
-"set the Accessibility 'minimized' attribute, read it back", and a single
-immediate read-back cannot work. Measured with a scratch probe, on Terminal and
-on Slack:
+on a window that had in fact minimised: Slack was gone from the on-screen window
+list straight afterwards and its `kAXMinimized` read `true`. (It was put back by
+hand; nothing was left in the Dock.) Measured with a scratch probe, on Terminal
+and on Slack:
 
 | after a `kAXMinimized = true` write that returned kAXErrorSuccess | the attribute reads |
 | --- | --- |
@@ -420,53 +418,78 @@ on Slack:
 | ~309 ms | the read itself FAILS: kAXErrorCannotComplete (-25204), after blocking the full 0.25 s messaging timeout - the app is busy animating the window into the Dock |
 | ~568 ms | true |
 
-So the read-back now waits for the window: poll every 30 ms up to a 1.0 s
-deadline (1.75x the settling time measured), counting "the app is too busy to
-answer" as *not yet* rather than as a failure, and reporting `WIN_ERR_IGNORED`
-only when the deadline passes with the window still where it was.
-`win_restore` waits the same way, for the same reason. Second run, after the
-fix: `target Terminal / minimized ok / restored ok`, exit 0, the window back at
-the front.
+So the spec's "set the attribute, read it back" cannot be done in one call. The
+first implementation waited for it inside `win_minimize`, which made the status
+true and cost ~0.6 s of frozen camera loop per flick. **The design taken instead
+defers the verification rather than dropping it:**
 
-That first failure left Slack in the Dock with nothing holding a handle on it,
-so `win_minimize` now keeps the window element as soon as the WRITE succeeds,
-whatever the read-back then decides, and `win minimize` always attempts the way
-back even when the minimise complained. A minimised window is off the window
-list; the handle is the only route to it, and the case where the read-back
-cannot confirm the window is exactly the case where someone needs that route.
+- `win_minimize` writes and returns at once. `WIN_OK` from it means only that
+  the write was accepted; it keeps the window element (a minimised window is off
+  the window list, so that handle is the only route back to it) and notes the
+  time.
+- `win_minimize_settled` reads the attribute back ONCE, never blocking beyond a
+  single Accessibility call, and answers `WIN_OK`, `WIN_ERR_IGNORED` (the
+  `WIN_SETTLE_DEADLINE_SEC` = 1.0 s deadline passed and the window is still
+  there) or the new `WIN_PENDING`. A read that times out counts as pending: an
+  app too busy to answer is what the animation looks like from outside.
+- `win_status` therefore gains a positive value: **0 ok, positive not-yet,
+  negative error**. `app/main.py` now treats only `win < 0` as a problem, so a
+  pending minimise raises no banner; `bridge.WIN_PENDING` mirrors it.
+- `gv_step` asks once per frame after a successful write, until the answer is
+  anything but pending. Across a flick, `result.win` reads `WIN_OK` (the write
+  took), `WIN_PENDING` on each frame the window is still travelling, then
+  `WIN_OK` or `WIN_ERR_IGNORED` on the frame it settles - and then nothing.
 
-**The price, stated plainly: `win_minimize` BLOCKS for about 0.6 s**, and up to
-a second on a window that will not minimise. In the live app that is the camera
-loop, so a flick will cost roughly 18 dropped frames on the frame it fires - a
-visible hitch in the preview and the HUD, on a gesture whose whole appeal is
-that it is instant. The alternatives are worse or bigger: trusting the write's
-success code drops the verification this project exists to insist on (and the
-resize's own "29 of 70 changed nothing" is why), and checking the attribute on
-a later frame instead of blocking is a change to `minimize()`'s contract and to
-`step.c`'s state, which is the spec author's call, not a task's. Flagged for
-the live try: if the hitch is objectionable, the cheap lever is the deadline,
-and the real fix is a later-frame check.
+**By-hand check (a), `core/build/win minimize`**, which polls exactly as the
+camera loop does:
 
-**By-hand check (b), the live-conditions probe** (camera open, 45 preview
-frames shown, then `win_minimize` and `win_restore` through ctypes):
+```
+target     Code
+written    ok
+      0 ms  not yet: the window is still on its way
+    304 ms  not yet: the window is still on its way
+    593 ms  ok
+settled    ok after 593 ms
+restored   ok
+```
+
+**By-hand check (b), the live-conditions probe** (camera open, 45 preview frames
+shown, then the same pair through ctypes, timing each call):
 
 ```
 camera open, showing 45 frames
-win_minimize -> 0 (ok) in 611 ms
-target       -> 'Terminal' (win_target_name status -2)
-last AXError -> -25204
-win_restore  -> 0 (ok) in 527 ms
+win_minimize -> 0 (ok) in 74 ms
+target       -> 'Messages' (win_target_name status -2)
+  poll 1: 1 (not yet ...) - the call itself took 0 ms, 74 ms since the write
+  poll 2: 1 (not yet ...) - the call itself took 251 ms, 376 ms since the write
+  poll 3: 0 (ok)          - the call itself took 210 ms, 638 ms since the write
+settled      -> 0 after 3 polls, 638 ms
+win_restore  -> 0 (ok) in 560 ms
 ```
 
 With the camera in use it still found a real window and not one of the Window
 Server's 10x18 pt camera-indicator windows: `win_is_candidate` holds for
 minimising as it does for resizing, which is the point of the two sharing one
-search. The `win_target_name` status of -2 is correct and documented - the name
-is filled in, but nothing is held, because a minimise keeps nothing. The
-`-25204` is the stale AXError from the busy read inside the settle wait, not a
-failure of this call; `win_last_ax_error` means "the most recent failing
-Accessibility call", and a successful `win_minimize` now contains one by design.
+search (`take_front_window`). The `win_target_name` status of -2 is correct and
+documented - the name is filled in, but nothing is held for resizing.
 
-The two timings above (611 ms, 527 ms) are the same measurement as the table,
-taken through the library in the live process, and they are what the 0.6 s
-figure in the paragraph above rests on.
+**What the deferral did and did not buy, stated plainly.** It removed the single
+0.6 s freeze: no one call now blocks for more than one Accessibility timeout.
+The total cost to the loop is roughly unchanged, just spread out - on the
+measurements above, the flick frame costs ~74 ms (the window search plus the
+write) and the polling frames cost 0, 251 and 210 ms, because a read of a busy
+application blocks for the full `AX_TIMEOUT_SEC` of 0.25 s before giving up. So
+a flick still costs the live loop about half a second in total, now as two or
+three frames of ~0.25 s rather than one of 0.6 s. **The lever, if that is still
+too much:** the settled read does not need the standard timeout at all - "no
+answer" is a perfectly good "not yet" - and dropping its messaging timeout to
+~30 ms would cut the worst polled frame to about that. Left as it is because the
+0.25 s timeout is what every other call here uses; worth revisiting with the
+frame rate measured live during a flick, which is Task 7's job.
+
+`win_restore` still waits for the window to come back, deliberately: no camera
+loop ever calls it (it exists for the tool and for probes), and a way back that
+cannot say whether it worked is not worth much. Measured at 527-560 ms.
+
+`leaks --atExit` reports 0 leaks on both `core/build/win get` and
+`core/build/win minimize`.

@@ -99,6 +99,7 @@ struct gv_ctx {
     int step_acquire_status; /* how asking went (a win_status), repeated while armed */
     double step_last_write_t;  /* frame time of the last window write; -INFINITY on acquire */
     int    step_write_pending; /* a changed scale is waiting for the next allowed frame */
+    int    step_minimise_pending; /* a minimise was written; ask on later frames whether it took */
 };
 
 /*
