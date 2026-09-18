@@ -79,6 +79,15 @@ typedef struct {
  *            once more - or WIN_ERR_IGNORED - on the frame it settles. After
  *            that the asking stops. A flick whose WRITE fails reports that
  *            error on the flick frame and is never asked about again.
+ *
+ *   both at once: a minimise takes about half a second to settle and a resize
+ *            arms in arm_hold_sec, so a flick followed by a pinch has the two
+ *            overlapping, with one `win` field between them. On any frame the
+ *            resize path speaks for, the resize's status wins: a window that
+ *            cannot be resized is something the person can do something about,
+ *            and a minimise still on its way is not. The pending minimise is
+ *            not dropped for it - the asking simply resumes on the frames
+ *            after the resize lets go.
  */
 gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *backends);
 

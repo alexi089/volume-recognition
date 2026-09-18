@@ -500,5 +500,18 @@ live flick (Task 7), and the numbers to beat are in this paragraph.
 loop ever calls it (it exists for the tool and for probes), and a way back that
 cannot say whether it worked is not worth much. Measured at 527-560 ms.
 
-`leaks --atExit` reports 0 leaks on both `core/build/win get` and
-`core/build/win minimize`.
+**One `win` field, two gestures.** A minimise settles in about 0.6 s and a
+resize arms in `arm_hold_sec` (0.25 s), so flicking and then pinching has both
+live at once - and `gv_step_result.win` can only say one thing. The resize's
+status wins on any frame the resize path speaks for: a window that cannot be
+resized is something the person can act on, while a minimise still on its way
+is not news. The pending minimise is not dropped for it; the asking resumes on
+the frames after the resize lets go. (Found in review: without that rule the
+poll overwrote a resize's `WIN_ERR_NOT_TRUSTED` / `NOT_RESIZABLE` / `IGNORED`
+for up to a second, and the preview raised no banner at all.) The banner also
+names the right gesture now - a failed flick reads `WINDOW NOT MINIMISING`, not
+`WINDOW NOT RESIZING`, and carries the app's name.
+
+`leaks --atExit` reports 0 leaks on `core/build/win get` and, re-run on the
+current binary after the deferral rewrite, 0 leaks on `core/build/win minimize`
+as well (2214 nodes, 315 KB, footprint 5216K).

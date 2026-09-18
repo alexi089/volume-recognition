@@ -316,7 +316,11 @@ def describe_problem(step, target: str):
         text = bridge.win_strerror(step.win)
         if step.win == bridge.WIN_ERR_AX:  # the raw code is what a bug report needs
             text += f" [AXError {bridge.win_last_ax_error()}]"
-        return "WINDOW NOT RESIZING", f"{text} ({target})" if target else text
+        # Two gestures reach the window now, and announcing "NOT RESIZING" when
+        # a flick failed tells the user about the wrong one.
+        headline = ("WINDOW NOT MINIMISING" if step.out.kind == bridge.KIND_MINIMIZE
+                    else "WINDOW NOT RESIZING")
+        return headline, f"{text} ({target})" if target else text
     if step.vol != bridge.VOL_OK:
         _, name = bridge.device_name()
         text = bridge.strerror(step.vol)
@@ -389,8 +393,11 @@ def main() -> None:
                     break
                 if live:
                     step = gesture.step(landmarks, t_sec, handedness)
-                    # Whose window a resize holds; empty outside a resize.
-                    target = bridge.win_target_name()[1] if step.out.kind == bridge.KIND_RESIZE else ""
+                    # Whose window the gesture is working on: the one a resize
+                    # holds, or the one a flick just minimised (the name is
+                    # filled in by either taking, see window.h). Empty otherwise.
+                    target = (bridge.win_target_name()[1]
+                              if step.out.kind in (bridge.KIND_RESIZE, bridge.KIND_MINIMIZE) else "")
                     problem = latch.update(describe_problem(step, target), now)
                     size = bridge.win_current_size()[1] if target else (0.0, 0.0)
                     recorder.write(t_sec, landmarks, step, handedness, target, size)

@@ -718,6 +718,48 @@ static void a_failed_minimise_is_reported_on_that_frame(void)
     gv_destroy(ctx);
 }
 
+/* Two things can want the one `win` field at once: a minimise still settling,
+ * and a resize that has just armed. The resize wins for as long as it is
+ * armed - its failures are the ones a person can act on, and a pending
+ * minimise is not news. The minimise is not abandoned either: the asking
+ * resumes on the frames after the resize lets go. Reachable in ordinary use,
+ * since arming takes only arm_hold_sec and a minimise settles in about 0.6 s. */
+static void a_resize_armed_while_a_minimise_settles_keeps_its_own_status(void)
+{
+    fake_reset(0.40f);
+    fake_settled_pending = 1000;              /* still on its way throughout */
+    fake_acquire_status = WIN_ERR_NOT_RESIZABLE;
+    gv_ctx *ctx = start_real();
+    step_palm_still(ctx, 0.0f, 0.3);
+    step_palm_fall_until_flick(ctx, 0.0f, 2.0f, 0.25);
+    CHECK(flicks == 1 && flick_win == WIN_OK);
+    step_palm_still(ctx, 2.0f, DT);
+    CHECK(last.win == WIN_PENDING);           /* the asking has started ... */
+
+    step_pinch(ctx, 0.0f, 0.0f, 0.5);         /* ... and now a resize arms on top of it */
+    CHECK(last.out.state == GV_ARMED && last.out.kind == GV_KIND_RESIZE);
+    int armed_frames = 0, reported = 0;
+    for (int i = 1; i <= 30; i++) {
+        gv_frame f = pinch(0.2f * (float)i / 30.0f);
+        step_frame(ctx, &f);
+        if (last.out.state == GV_ARMED) {
+            armed_frames++;
+            reported += (last.win == WIN_ERR_NOT_RESIZABLE);
+        }
+    }
+    CHECK(armed_frames == 30 && reported == 30); /* never once WIN_PENDING */
+
+    for (int i = 0; i < 30; i++)                 /* the hand leaves: the resize ends */
+        step_frame(ctx, NULL);
+    CHECK(last.out.state == GV_IDLE);
+    CHECK(last.win == WIN_PENDING);              /* and the asking picks up where it left off */
+
+    fake_settled_pending = fake_settled_calls;   /* now let the window land */
+    step_frame(ctx, NULL);
+    CHECK(last.win == WIN_OK);
+    gv_destroy(ctx);
+}
+
 static void a_volume_slide_never_touches_the_window(void)
 {
     fake_reset(0.30f);
@@ -782,6 +824,7 @@ int main(void)
     RUN(a_minimise_that_never_settles_is_reported_ignored);
     RUN(a_failed_minimise_write_is_reported_on_that_frame_and_not_polled);
     RUN(a_failed_minimise_is_reported_on_that_frame);
+    RUN(a_resize_armed_while_a_minimise_settles_keeps_its_own_status);
     RUN(a_volume_slide_never_touches_the_window);
     return TEST_SUMMARY();
 }

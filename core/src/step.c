@@ -46,6 +46,10 @@ gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *ba
         ctx->step_last_write_t = -INFINITY;
         ctx->step_write_pending = 0;
     }
+    /* Whether the resize path speaks for `r.win` on this frame. Captured here
+     * because the release block below clears step_resize_active, and the frame
+     * a resize ends on still carries that resize's last word. */
+    const int resize_reported = ctx->step_resize_active;
     if (ctx->step_resize_active) {
         /* Without a window, keep saying why for as long as the hand is up. */
         r.win = (win_status)ctx->step_acquire_status;
@@ -88,7 +92,13 @@ gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *ba
          * the question "did it actually go?" is carried into the frames that
          * follow. Only a write that succeeded has anything to wait for. */
         ctx->step_minimise_pending = (r.win == WIN_OK);
-    } else if (ctx->step_minimise_pending) {
+    } else if (ctx->step_minimise_pending && !resize_reported) {
+        /* Not on a frame the resize spoke for. Both can be true at once - a
+         * minimise settles in about 0.6 s and a resize arms in arm_hold_sec -
+         * and then the resize's status wins, because a window that cannot be
+         * resized is something the person can act on while a minimise still
+         * on its way is not. The minimise is not abandoned by losing a frame:
+         * the flag stays set and the asking resumes once the resize is over. */
         r.win = window->minimize_settled();
         /* WIN_PENDING is the one answer that means "ask me again"; anything
          * else, good or bad, is the end of it. */
