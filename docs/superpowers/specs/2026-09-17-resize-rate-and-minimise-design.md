@@ -828,6 +828,24 @@ rather than hidden: that recording holds sixteen attempts at the OLD gesture and
 not one hold, so the new rule is right to ignore it.
 
 The study tool stays in the tree at `core/tools/tune_flick.c`. Its `armdrop`
-mode is the reference this rule was built from, and it still checks itself
-against `gv_update` at the shipped constants on all nineteen recordings before
-printing anything.
+mode is the reference this rule was built from, and it checks itself against
+`gv_update` before printing anything - comparing, frame by frame, which frames
+each of the two fires on, and reporting how many frames they decided
+differently out of how many either fired on.
+
+That check is run twice, because at the shipped constants **neither rule fires
+on any of the nineteen recordings, and 0 == 0 demonstrates nothing**; the tool
+says so in as many words. The second run uses a deliberately loose setting
+(hold 0.03 s, still 50 hand-lengths/s, window 1.5 s, drop 0.05) where both fire:
+**52 frames where either fired, 0 decided differently.** Comparing decisions
+rather than counts is what found two real divergences, both since fixed in the
+tool: it searched back by time alone where the core is limited by its
+40-entry ring buffer, and it anchored the refractory on the last busy frame
+rather than on the frame the machine arrives at idle. Removing either fix alone
+brings the mismatches back, so both were load-bearing.
+
+The tool shares the core's geometry, config and - since that check - the two
+frame-level rules that decide what is admissible at all (`gv_frame_is_usable`
+and `GV_MIN_HAND_SCALE`, lifted out of `gesture.c` into `gesture_internal.h`).
+It still re-implements the flick decision itself, which is the point: the
+constants can be swept without rebuilding the core.

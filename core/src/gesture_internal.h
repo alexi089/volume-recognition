@@ -1,8 +1,16 @@
 /*
  * gesture_internal.h - what the state machine (gesture.c) and the gestures
- * (the files in gestures/) share. Private to core/src: nothing outside includes it, so
- * gv_ctx stays an opaque type to callers while its fields are visible to the
- * few files that implement it.
+ * (the files in gestures/) share. Not part of the library's API: gv_ctx stays
+ * an opaque type to everything that goes through gesture.h (app/bridge.py and
+ * the ctypes side), while its fields are visible to the few files that
+ * implement it.
+ *
+ * core/tools/tune_flick.c also includes it, for the two frame-level rules at
+ * the bottom. That tool re-implements the flick offline so its constants can be
+ * swept without rebuilding the core, and then checks itself against gv_update;
+ * a check like that is worth nothing if the two sides disagree about which
+ * frames are even admissible, so they share that decision rather than each
+ * having their own copy of it.
  */
 #ifndef GV_GESTURE_INTERNAL_H
 #define GV_GESTURE_INTERNAL_H
@@ -147,5 +155,19 @@ extern const gv_gesture gv_gesture_volume;
 extern const gv_gesture gv_gesture_resize;
 
 float gv_clamp01(float v);
+
+/* --- what counts as a frame at all -------------------------------------- */
+
+/* MediaPipe should never emit NaN, but gv_update is the boundary where outside
+ * data enters and one NaN would poison the filter for good. A frame that fails
+ * this is dropped whole. */
+int gv_frame_is_usable(const gv_frame *f);
+
+/* Below this, in frame heights, a "hand" is a detector glitch rather than a
+ * hand: landmark models now and then collapse one onto a point, and
+ * frame_is_plausible's comment records a measured 0.01x. Everything that
+ * divides by gv_hand_scale checks this first, because dividing by such a scale
+ * turns any wobble into a gesture. */
+#define GV_MIN_HAND_SCALE 1e-3f
 
 #endif /* GV_GESTURE_INTERNAL_H */

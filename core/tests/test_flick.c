@@ -1,13 +1,16 @@
 /*
- * The flick: an open palm swiped down, the one-shot gesture that minimises the
- * front window. It never arms, so there is no state to watch; what a test
- * counts is FIRINGS - frames where the output says GV_KIND_MINIMIZE with
- * `changed` set.
+ * The flick: an open palm HELD nearly still and then DROPPED, the one-shot
+ * gesture that minimises the front window. It never enters ARMED, so there is
+ * no state to watch; what a test counts is FIRINGS - frames where the output
+ * says GV_KIND_MINIMIZE with `changed` set.
  *
  * The hand is real (MediaPipe landmarks from the fixture photos); the motion is
- * synthetic: a fixture is slid by a number of hand-lengths and fed in at 30 fps.
- * Unlike test_gesture, which slides sideways, everything here is about falling,
- * so `dy` is measured DOWN (the direction image y already grows in).
+ * synthetic: a fixture is held in place or slid by a number of hand-lengths and
+ * fed in at 30 fps. Unlike test_gesture, which slides sideways, everything here
+ * is about falling, so `dy` is measured DOWN (the direction image y already
+ * grows in). A test that wants a flick therefore has TWO parts - `still` for
+ * the hold, then `sweep` for the drop - and leaving the first one out is itself
+ * a test (a_drop_with_no_hold_before_it_does_not_fire).
  *
  * The gesture is in two parts: an open palm HELD nearly still, and then a DROP.
  * The distances and durations below are arithmetic on the SHIPPED defaults
@@ -251,6 +254,32 @@ static void a_drop_with_no_hold_before_it_does_not_fire(void)
     still(&s, &fixture_real_open_palm, 0.5);
     CHECK(s.flicks == 0);
     finish(&s);
+}
+
+static void a_hold_shorter_than_the_limit_does_not_fire(void)
+{
+    /* The hold has a LENGTH, and this is what pins it. Every other test here
+     * holds for 0.4 s, which only ever asks "was there a hold at all" - a rule
+     * that accepted a single open-palm frame as a hold would pass all of them.
+     * 0.15 s is five frames at 30 fps, so the run reaches 0.13 s, short of the
+     * 0.25 s asked for; the drop after it is the same 1.2 hand-lengths that
+     * fires below. */
+    session brief = start();
+    still(&brief, &fixture_real_open_palm, 0.15);
+    sweep(&brief, 0.0f, 1.2f, 0.3);
+    still(&brief, &fixture_real_open_palm, 0.4);
+    CHECK(brief.flicks == 0);
+    finish(&brief);
+
+    /* The same motion behind a hold that IS long enough: 0.3 s is nine frames,
+     * a run of 0.27 s. The only difference between the two is the length of the
+     * pause. */
+    session enough = start();
+    still(&enough, &fixture_real_open_palm, 0.3);
+    sweep(&enough, 0.0f, 1.2f, 0.3);
+    still(&enough, &fixture_real_open_palm, 0.4);
+    CHECK(enough.flicks == 1);
+    finish(&enough);
 }
 
 static void a_hand_lowered_slowly_instead_of_held_does_not_fire(void)
@@ -587,6 +616,7 @@ int main(void)
     fprintf(stderr, "test_flick\n");
     RUN(a_held_open_palm_then_a_drop_fires_once);
     RUN(a_drop_with_no_hold_before_it_does_not_fire);
+    RUN(a_hold_shorter_than_the_limit_does_not_fire);
     RUN(a_hand_lowered_slowly_instead_of_held_does_not_fire);
     RUN(a_drop_slower_than_the_drop_window_does_not_fire);
     RUN(a_drop_that_is_not_far_enough_does_not_fire);

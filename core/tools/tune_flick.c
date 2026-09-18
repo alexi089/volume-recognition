@@ -49,6 +49,22 @@
  * The recordings are untracked, so the numbers this prints cannot be rebuilt
  * from the repository alone - the table it produced is written into the design
  * spec's Findings, which is the durable record.
+ *
+ * WHAT THIS TOOL SHARES WITH THE CORE, AND WHAT IT REPEATS.
+ *
+ * Shared, by including the core's own headers: all the geometry (pose.h -
+ * gv_pose_is_open_palm, gv_pose_is_fist, gv_hand_scale, gv_palm_x / gv_palm_y,
+ * gv_hand_lowest_y), the config and its defaults (gesture.h), and the two
+ * frame-level rules that decide what is admissible at all - gv_frame_is_usable
+ * and GV_MIN_HAND_SCALE (gesture_internal.h). Those two were static inside
+ * gesture.c until this tool needed them: a tool that claims to reproduce the
+ * core is worth nothing if the two disagree about which frames exist.
+ *
+ * Repeated here, on purpose: the flick's decision itself, and the state
+ * machine's idle/refractory bookkeeping around it. The point of repeating it is
+ * to sweep the constants without rebuilding the core - and the price is that
+ * the copy can drift, so `armdrop` opens by comparing the two frame by frame
+ * (see compare_rules) rather than taking the resemblance on trust.
  */
 #include <math.h>
 #include <stdio.h>
@@ -56,6 +72,7 @@
 #include <string.h>
 
 #include "gesture.h"
+#include "gesture_internal.h" /* gv_frame_is_usable, GV_MIN_HAND_SCALE: see below */
 #include "pose.h"
 #include "trace.h"
 
@@ -194,11 +211,11 @@ static int probe(const trace *tr, const gv_config *cfg, float min_travel, float 
     int n = 0;
     for (int i = 1; i < tr->count; i++) {
         const gv_frame *newest = &tr->f[i];
-        if (!newest->present)
+        if (!gv_frame_is_usable(newest))
             continue;
         int oldest = -1;
         for (int j = i - 1; j >= 0; j--) {
-            if (!tr->f[j].present)
+            if (!gv_frame_is_usable(&tr->f[j]))
                 continue;
             if (newest->t_sec - tr->f[j].t_sec > (double)window)
                 break;
@@ -216,10 +233,11 @@ static int probe(const trace *tr, const gv_config *cfg, float min_travel, float 
         int best = -1;
         float best_dy = 0.0f, best_dx = 0.0f;
         for (int j = oldest; j < i; j++) {
-            if (!tr->f[j].present || !gv_pose_is_open_palm(&tr->f[j], aspect, &cfg->pose))
+            if (!gv_frame_is_usable(&tr->f[j]) ||
+                !gv_pose_is_open_palm(&tr->f[j], aspect, &cfg->pose))
                 continue;
             float hl = gv_hand_scale(&tr->f[j], aspect);
-            if (hl < 1e-4f)
+            if (hl < GV_MIN_HAND_SCALE)
                 continue;
             float dy = (y_new - gv_palm_y(&tr->f[j])) / hl;
             if (best < 0 || dy > best_dy) {
@@ -247,8 +265,8 @@ static int probe(const trace *tr, const gv_config *cfg, float min_travel, float 
         m->best_dx = best_dx;
         m->win_open_old = gv_pose_is_open_palm(&tr->f[oldest], aspect, &cfg->pose);
         float hl_win = gv_hand_scale(&tr->f[oldest], aspect);
-        m->win_dy = hl_win > 1e-4f ? (y_new - gv_palm_y(&tr->f[oldest])) / hl_win : 0.0f;
-        m->win_dx = hl_win > 1e-4f ? fabsf(x_new - gv_palm_x(&tr->f[oldest], aspect)) / hl_win : 0.0f;
+        m->win_dy = hl_win > GV_MIN_HAND_SCALE ? (y_new - gv_palm_y(&tr->f[oldest])) / hl_win : 0.0f;
+        m->win_dx = hl_win > GV_MIN_HAND_SCALE ? fabsf(x_new - gv_palm_x(&tr->f[oldest], aspect)) / hl_win : 0.0f;
         m->size = gv_hand_scale(newest, aspect) / gv_hand_scale(&tr->f[best], aspect);
         m->open_new = gv_pose_is_open_palm(newest, aspect, &cfg->pose);
         m->fist_new = gv_pose_is_fist(newest, aspect, &cfg->pose);
@@ -430,17 +448,24 @@ static fdata *frames_measure(const trace *tr, const gv_config *cfg, float still)
     for (int i = 0; i < tr->count; i++) {
         const gv_frame *f = &tr->f[i];
         d[i].hold_start = -1;
-        if (!f->present)
+        /* Exactly what flick_remember admits, and for the same two reasons:
+         * gv_frame_is_usable keeps NaN out, and a hand below GV_MIN_HAND_SCALE
+         * is a detector glitch that is dropped WHOLE - it neither continues a
+         * hold nor breaks one, and it is not a link in the tracking-gap chain
+         * either. `present` here therefore means "in the core's flick
+         * history", which is the only sense that matters below. */
+        if (!gv_frame_is_usable(f))
+            continue;
+        float scale = gv_hand_scale(f, tr->aspect);
+        if (scale < GV_MIN_HAND_SCALE)
             continue;
         d[i].present = 1;
         d[i].x = gv_palm_x(f, tr->aspect);
         d[i].y = gv_palm_y(f);
-        d[i].scale = gv_hand_scale(f, tr->aspect);
+        d[i].scale = scale;
         d[i].low = gv_hand_lowest_y(f);
         d[i].open = gv_pose_is_open_palm(f, tr->aspect, &cfg->pose);
         d[i].fist = gv_pose_is_fist(f, tr->aspect, &cfg->pose);
-        if (d[i].scale < 1e-4f)
-            continue;
 
         /* Speed against the previous frame that had a hand in it, in
          * hand-lengths per second. A hole longer than the grace breaks the run
@@ -483,39 +508,56 @@ static int armdrop_run(const trace *tr, const gv_config *cfg, const armdrop *p,
 
     fdata *d = frames_measure(tr, &c, p->still);
     int count = 0;
-    double last_busy_t = -INFINITY, last_flick_t = -INFINITY;
+    double last_release_t = -INFINITY, last_flick_t = -INFINITY;
+    /* The core keeps its history in a ring of GV_FLICK_HISTORY entries and
+     * empties it when a flick fires, so the search back can be cut short by the
+     * buffer as well as by the drop window. Counting the entries the core would
+     * be holding is what makes this a reproduction rather than a resemblance:
+     * without it, a drop window longer than the buffer (1.33 s at 30 fps) is
+     * searched further here than the core can search. */
+    int hist = 0;
+    gv_state prev_state = GV_IDLE;
 
     for (int i = 0; i < tr->count; i++) {
         double t = tr->f[i].t_sec;
-        if (states[i] != GV_IDLE) {
-            last_busy_t = t;
+        /* go_idle records the release on the frame the machine ARRIVES at idle,
+         * so that is the frame to take it from - not the last busy one before
+         * it, which is a frame earlier. */
+        if (states[i] == GV_IDLE && prev_state != GV_IDLE)
+            last_release_t = t;
+        prev_state = states[i];
+
+        if (d[i].present)
+            hist++;   /* flick_remember takes this frame, before the check below */
+
+        if (states[i] != GV_IDLE || !d[i].present)
             continue;
-        }
-        if (!d[i].present || d[i].scale < 1e-4f)
+        if (hist < 2)
             continue;
-        /* The refractory. last_busy_t is the last frame the machine was NOT
-         * idle, which is one frame before gesture.c's own last_release_t - at
-         * 30 fps, 33 ms of slack on a 1.5 s quiet period. */
-        if (t - last_busy_t < (double)cfg->flick_refractory_sec ||
+        if (t - last_release_t < (double)cfg->flick_refractory_sec ||
             t - last_flick_t < (double)cfg->flick_refractory_sec)
             continue;
+        /* gv_update also refuses a frame on which a gesture that has just ended
+         * reports its final value. That cannot happen here: such a frame IS the
+         * release frame, so the refractory above has already rejected it for any
+         * flick_refractory_sec above zero. */
         if (d[i].fist || d[i].low > 1.0f - edge_margin)
             continue;
 
         int fired = 0;
-        double reach = (double)p->drop_window;
+        int budget = hist < GV_FLICK_HISTORY ? hist : GV_FLICK_HISTORY;
+        int steps = 0;
         int oldest = i;
         for (int j = i - 1; j >= 0 && !fired; j--) {
             if (!d[j].present)
                 continue;
-            if (t - tr->f[j].t_sec > reach)
+            if (++steps > budget - 1)
+                break;                      /* out of buffer, as the core would be */
+            if (t - tr->f[j].t_sec > (double)p->drop_window)
                 break;
             if (tr->f[oldest].t_sec - tr->f[j].t_sec > (double)cfg->release_grace_sec)
                 break;
             oldest = j;
-            if (d[j].scale < 1e-4f)
-                continue;
-
             if (held_for(tr, d, j) < (double)p->hold)
                 continue;
             float dy = (d[i].y - d[j].y) / d[j].scale;
@@ -528,11 +570,54 @@ static int armdrop_run(const trace *tr, const gv_config *cfg, const armdrop *p,
                 fires[count] = t;
             count++;
             last_flick_t = t;
+            hist = 0;   /* the core clears its history on firing */
         }
     }
     free(d);
     free(states);
     return count;
+}
+
+/* Do the rule here and the rule in the core decide the same way, frame by
+ * frame? Both are run over the same recording with the same config, and the
+ * frames each fires on are collected; a DISAGREEMENT is a frame that one fired
+ * on and the other did not. `either` counts the frames at least one fired on -
+ * how many decisions the comparison actually got to see.
+ *
+ * That last number is the point. Comparing fire COUNTS at the shipped constants
+ * would be worthless: both sides are zero on every recording, and 0 == 0
+ * demonstrates nothing about the rules, only that neither fires. So the caller
+ * runs this at a deliberately loose setting as well, where both fire hundreds
+ * of times and the two can actually differ. */
+static int compare_rules(const trace *tr, const gv_config *cfg, const armdrop *p,
+                         float edge_margin, int *either_out, int *mine_out, int *core_out)
+{
+    static double mine[MAX_FIRES], core[MAX_FIRES];
+    gv_config c = *cfg;
+    c.flick_edge_margin      = edge_margin;
+    c.flick_hold_sec         = p->hold;
+    c.flick_still_speed      = p->still;
+    c.flick_drop_window_sec  = p->drop_window;
+    c.flick_drop             = p->drop;
+
+    int na = armdrop_run(tr, &c, p, edge_margin, mine, MAX_FIRES);
+    int nb = replay(tr, &c, NULL, core, MAX_FIRES);
+    if (na > MAX_FIRES) na = MAX_FIRES;
+    if (nb > MAX_FIRES) nb = MAX_FIRES;
+    *mine_out = na;
+    *core_out = nb;
+
+    /* Both lists are frame times in order, taken from the same trace, so equal
+     * frames compare exactly; walking them together is a set difference. */
+    int i = 0, j = 0, disagree = 0, either = 0;
+    while (i < na || j < nb) {
+        if (j >= nb || (i < na && mine[i] < core[j])) { i++; disagree++; }
+        else if (i >= na || core[j] < mine[i])        { j++; disagree++; }
+        else                                          { i++; j++; }
+        either++;
+    }
+    *either_out = either;
+    return disagree;
 }
 
 static const float k_holds[]    = { 0.2f, 0.3f };
@@ -590,26 +675,46 @@ static void print_armdrop(float edge_margin, const char *positives,
     /* --- the self-check: this rule against the one that ships -------------
      * This mode was written before gesture.c had the rule, so it is the
      * reference the C was built to match. Keeping the comparison means the two
-     * cannot drift apart silently: at the shipped constants, offline and
-     * gv_update must fire on the same number of frames in every recording. */
-    armdrop shipped = { base.flick_hold_sec, base.flick_still_speed,
-                        base.flick_drop_window_sec, base.flick_drop };
-    printf("# self-check: this offline rule against gv_update, at the shipped constants\n");
-    int bad = 0;
-    int mine = armdrop_run(&pos, &base, &shipped, edge_margin, fires, MAX_FIRES);
-    int real = replay(&pos, &base, NULL, fires, MAX_FIRES);
-    printf("#   %-46s offline %d, gv_update %d%s\n", positives, mine, real,
-           mine == real ? "" : "   <-- MISMATCH");
-    bad += mine != real;
-    for (int i = 0; i < corpus_count; i++) {
-        mine = armdrop_run(&neg[i], &base, &shipped, edge_margin, fires, MAX_FIRES);
-        real = replay(&neg[i], &base, NULL, fires, MAX_FIRES);
-        if (mine != real) {
-            printf("#   %-46s offline %d, gv_update %d   <-- MISMATCH\n", corpus[i], mine, real);
-            bad++;
+     * cannot drift apart silently. It is run twice: at the constants that ship,
+     * and at a loose setting chosen so that both rules fire a great many times,
+     * because at the shipped constants neither fires on any recording and a
+     * comparison of two zeros would prove nothing. */
+    const struct { const char *what; armdrop p; } checks[] = {
+        { "shipped", { base.flick_hold_sec, base.flick_still_speed,
+                       base.flick_drop_window_sec, base.flick_drop } },
+        { "loose  ", { 0.03f, 50.0f, 1.5f, 0.05f } },
+    };
+    for (int ci = 0; ci < 2; ci++) {
+        int files = 0, disagree_total = 0, either_total = 0, mine_total = 0, core_total = 0;
+        printf("# self-check (%s: hold %.2f, still %.1f, window %.2f, drop %.2f)\n",
+               checks[ci].what, (double)checks[ci].p.hold, (double)checks[ci].p.still,
+               (double)checks[ci].p.drop_window, (double)checks[ci].p.drop);
+        for (int f = -1; f < corpus_count; f++) {
+            const trace *tr = f < 0 ? &pos : &neg[f];
+            const char *nm = f < 0 ? positives : corpus[f];
+            int either = 0, na = 0, nb = 0;
+            int d = compare_rules(tr, &base, &checks[ci].p, edge_margin, &either, &na, &nb);
+            files++;
+            disagree_total += d;
+            either_total += either;
+            mine_total += na;
+            core_total += nb;
+            if (d != 0) {
+                const char *bn = strrchr(nm, '/');
+                printf("#   %-34s offline %d, core %d, %d frames differ   <-- MISMATCH\n",
+                       bn ? bn + 1 : nm, na, nb, d);
+            }
         }
+        printf("#   %d recordings, %d frames where either rule fired (offline %d, core %d),\n"
+               "#   %d of them decided differently%s\n",
+               files, either_total, mine_total, core_total, disagree_total,
+               disagree_total == 0
+                   ? (either_total == 0
+                          ? " - but NOTHING fired, so this shows nothing"
+                          : ": the two agree")
+                   : " - THEY DISAGREE, the numbers below are suspect");
     }
-    printf("#   %s\n\n", bad == 0 ? "all 19 recordings agree" : "THE TWO DISAGREE - numbers below are suspect");
+    putchar('\n');
 
     /* --- did the owner ever pause before swiping? ------------------------- */
     printf("# Was there a held, still open palm before each proxy positive?\n");

@@ -39,14 +39,13 @@
 #include "gesture_internal.h"
 #include "pose.h"
 
-/* A hand this small (in frame heights) is noise, not a hand, and dividing
- * travel by it would blow the slider up. */
-#define MIN_HAND_SCALE 1e-3f
-
 gv_config gv_default_config(void)
 {
-    /* Designated initialisers: fields are named, order does not matter, and
-     * anything left out would be zero. */
+    /* Designated initialisers: fields are named, so the compiler does not care
+     * what order they come in and anything left out would be zero. They are
+     * kept in the struct's own order anyway - this list is where a reader
+     * checks that gv_config and app/bridge.py still agree field for field, and
+     * that check is only easy if both read top to bottom. */
     gv_config cfg = {
         .aspect            = 16.0f / 9.0f,
         .pose              = { .extend_reach = 1.20f, .extend_straight = 0.93f,
@@ -132,8 +131,6 @@ gv_config gv_default_config(void)
          * recordings, about forty minutes, at every setting tried. */
         .flick_drop           = 0.8f,
         .flick_drop_window_sec = 0.6f,
-        .flick_hold_sec       = 0.25f,
-        .flick_still_speed    = 1.0f,
         .flick_max_sideways   = 0.5f,
         /* 1.5 s, not 1.0: with the motion rule alone the recordings produce
          * twelve downward sweeps of an open palm, and the last of them that is
@@ -148,6 +145,8 @@ gv_config gv_default_config(void)
          * narrow - 0.89 against 0.91 - so this is a measured threshold, not a
          * comfortable one. */
         .flick_edge_margin    = 0.10f,
+        .flick_hold_sec       = 0.25f,
+        .flick_still_speed    = 1.0f,
     };
     return cfg;
 }
@@ -316,10 +315,10 @@ static void start_arming(gv_ctx *ctx, const gv_gesture *gesture, double t)
     gv_filter_reset(&ctx->y_filter);
 }
 
-/* MediaPipe should never emit NaN, but this is the boundary where outside
- * data enters, and one NaN would otherwise poison the filter for good: every
- * later output would be NaN too. */
-static int frame_is_usable(const gv_frame *f)
+/* Declared in gesture_internal.h, and not static, because the flick's tuning
+ * harness (core/tools/tune_flick.c) has to admit exactly the frames this does
+ * or its comparison against gv_update means nothing. */
+int gv_frame_is_usable(const gv_frame *f)
 {
     if (!f->present)
         return 0;
@@ -395,7 +394,7 @@ static void flick_remember(gv_ctx *ctx, const gv_frame *f, double t)
      * any wobble a drop, so the frame is dropped whole: it neither continues a
      * hold nor breaks one, and the next frame's speed is measured across it -
      * where the tracking-gap rule can see it. */
-    if (scale < MIN_HAND_SCALE)
+    if (scale < GV_MIN_HAND_SCALE)
         return;
 
     /* Negative means "this frame is not part of a held, still open palm". */
@@ -442,11 +441,22 @@ static void flick_remember(gv_ctx *ctx, const gv_frame *f, double t)
  * This frame is the end of the drop, so the questions about the hand's shape
  * and place are asked of it directly: not a fist, and still inside the picture.
  * Then the search goes back through flick_drop_window_sec of history for a
- * frame that ENDED a long enough hold and sits far enough above this one. The
- * most recent such frame wins, because it is the hold the drop actually came
- * from; the walk stops at a hole in tracking longer than the release grace,
+ * frame that ENDED a long enough hold AND sits far enough above this one. Both
+ * halves of that matter: a hold that is too close above does not end the
+ * search, it is skipped and the walk carries on to earlier holds inside the
+ * window. The walk stops at a hole in tracking longer than the release grace,
  * since a hand that vanishes and reappears lower down did not necessarily
  * travel there.
+ *
+ * Carrying on past a too-close hold has a consequence worth naming, because it
+ * is a decision and not an accident: a hand lowered in STEPS can fire. Hold,
+ * drop a little, hold again, drop a little more - if the two steps together
+ * cover flick_drop and the whole staircase fits inside one drop window, the
+ * earlier hold is the reference and it counts. Stopping at the first hold found
+ * would reject that, and would also reject a perfectly ordinary drop that
+ * happens to pass through a momentarily steady patch on its way down. The
+ * staircase is the price of not rejecting those, and it is a shape nothing in
+ * the recordings produces.
  *
  * Units: gv_palm_x multiplies by the aspect and gv_palm_y does not need to, so
  * both are in frame heights, as is the hand scale (see pose.h). Dividing by the
@@ -514,7 +524,7 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
         return unchanged;
     }
 
-    const int usable = frame_is_usable(frame);
+    const int usable = gv_frame_is_usable(frame);
     float raw_x = 0.0f, raw_y = 0.0f;
     /* Remember when a hand was last seen BEFORE this frame, then note this one. */
     ctx->last_hand_before_t = ctx->last_hand_t;
@@ -592,7 +602,7 @@ gv_output gv_update(gv_ctx *ctx, const gv_frame *frame)
              * takes hold of the next on exactly that). The next frame may arm. */
             if (!let_go_this_frame && t - ctx->arm_started_t >= (double)cfg->arm_hold_sec) {
                 float scale = ctx->scale_sum / (float)ctx->scale_count;
-                if (scale < MIN_HAND_SCALE) {
+                if (scale < GV_MIN_HAND_SCALE) {
                     go_idle(ctx, t);
                 } else {
                     ctx->state = GV_ARMED;
