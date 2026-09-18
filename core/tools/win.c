@@ -75,8 +75,14 @@ static int minimize_and_back(void)
         double t0 = now_sec();
         win_status settled = WIN_PENDING;
         while (settled == WIN_PENDING) {
+            /* Both numbers matter, and they are not the same one: how long the
+             * ASKING cost (what a camera frame would pay) and how long the
+             * window has taken so far. */
+            double t1 = now_sec();
             settled = win_minimize_settled();
-            printf("  %5.0f ms  %s\n", (now_sec() - t0) * 1e3, win_strerror(settled));
+            double call_ms = (now_sec() - t1) * 1e3;
+            printf("  %5.0f ms since the write, the ask cost %3.0f ms  %s\n",
+                   (now_sec() - t0) * 1e3, call_ms, win_strerror(settled));
             if (settled == WIN_PENDING)
                 usleep(50000);
         }

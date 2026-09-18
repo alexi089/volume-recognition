@@ -444,12 +444,17 @@ defers the verification rather than dropping it:**
 camera loop does:
 
 ```
-target     Code
+target     Terminal
 written    ok
-      0 ms  not yet: the window is still on its way
-    304 ms  not yet: the window is still on its way
-    593 ms  ok
-settled    ok after 593 ms
+      0 ms since the write, the ask cost   0 ms  not yet: the window is still on its way
+     89 ms since the write, the ask cost  34 ms  not yet: the window is still on its way
+    177 ms since the write, the ask cost  35 ms  not yet: the window is still on its way
+    264 ms since the write, the ask cost  34 ms  not yet: the window is still on its way
+    354 ms since the write, the ask cost  35 ms  not yet: the window is still on its way
+    444 ms since the write, the ask cost  35 ms  not yet: the window is still on its way
+    532 ms since the write, the ask cost  35 ms  not yet: the window is still on its way
+    582 ms since the write, the ask cost   0 ms  ok
+settled    ok after 582 ms
 restored   ok
 ```
 
@@ -458,13 +463,14 @@ shown, then the same pair through ctypes, timing each call):
 
 ```
 camera open, showing 45 frames
-win_minimize -> 0 (ok) in 74 ms
-target       -> 'Messages' (win_target_name status -2)
-  poll 1: 1 (not yet ...) - the call itself took 0 ms, 74 ms since the write
-  poll 2: 1 (not yet ...) - the call itself took 251 ms, 376 ms since the write
-  poll 3: 0 (ok)          - the call itself took 210 ms, 638 ms since the write
-settled      -> 0 after 3 polls, 638 ms
-win_restore  -> 0 (ok) in 560 ms
+win_minimize -> 0 (ok) in 18 ms
+target       -> 'Terminal' (win_target_name status -2)
+  poll 1: 1 (not yet ...) - the call itself took  0 ms,  18 ms since the write
+  poll 2: 1 (not yet ...) - the call itself took 31 ms, 100 ms since the write
+  ... polls 3 to 7, each 30-31 ms ...
+  poll 8: 0 (ok)          - the call itself took 17 ms, 577 ms since the write
+settled      -> 0 after 8 polls, 577 ms
+win_restore  -> 0 (ok) in 520 ms
 ```
 
 With the camera in use it still found a real window and not one of the Window
@@ -473,19 +479,22 @@ minimising as it does for resizing, which is the point of the two sharing one
 search (`take_front_window`). The `win_target_name` status of -2 is correct and
 documented - the name is filled in, but nothing is held for resizing.
 
-**What the deferral did and did not buy, stated plainly.** It removed the single
-0.6 s freeze: no one call now blocks for more than one Accessibility timeout.
-The total cost to the loop is roughly unchanged, just spread out - on the
-measurements above, the flick frame costs ~74 ms (the window search plus the
-write) and the polling frames cost 0, 251 and 210 ms, because a read of a busy
-application blocks for the full `AX_TIMEOUT_SEC` of 0.25 s before giving up. So
-a flick still costs the live loop about half a second in total, now as two or
-three frames of ~0.25 s rather than one of 0.6 s. **The lever, if that is still
-too much:** the settled read does not need the standard timeout at all - "no
-answer" is a perfectly good "not yet" - and dropping its messaging timeout to
-~30 ms would cut the worst polled frame to about that. Left as it is because the
-0.25 s timeout is what every other call here uses; worth revisiting with the
-frame rate measured live during a flick, which is Task 7's job.
+**What this costs the live loop, in two steps.** Deferring the check removed the
+single 0.6 s freeze, but not the total: the first version still paid the
+standard `AX_TIMEOUT_SEC` of 0.25 s on every asking frame, because a busy
+application does not answer and the read waits out its whole timeout (measured:
+polls of 0, 251 and 210 ms). So the settled read was given a timeout of its own,
+`WIN_SETTLE_READ_TIMEOUT_SEC` = 0.03 s: an application that is ready answers in
+under a millisecond, one that is busy answers nothing, and silence already means
+"not yet" - there is nothing to be gained by waiting for it. The 1.0 s deadline,
+not the read, is still what decides that a window is never going to move.
+
+Measured after that change, under the camera: the write costs ~18 ms, each of
+the eight asks 30-31 ms, and the window is confirmed 577 ms after the write. A
+frame's budget at 30 fps is 33 ms, so while a minimise is settling the loop runs
+at roughly half rate for about 0.6 s, instead of stopping dead for a quarter of
+a second at a time. Whether even that is visible is a question for the first
+live flick (Task 7), and the numbers to beat are in this paragraph.
 
 `win_restore` still waits for the window to come back, deliberately: no camera
 loop ever calls it (it exists for the tool and for probes), and a way back that

@@ -124,6 +124,22 @@ void win_release(void);
  */
 #define WIN_SETTLE_DEADLINE_SEC 1.0
 
+/*
+ * How long ONE win_minimize_settled read waits for an answer, as opposed to how
+ * long the window has in total.
+ *
+ * These are different questions and want different numbers. Measured: an
+ * application that is ready to answer does so in under a millisecond, and one
+ * that is busy animating does not answer at all - it blocks the read for the
+ * whole timeout and then fails. At the usual AX_TIMEOUT_SEC that cost the
+ * camera loop a quarter of a second per asking frame (measured: polls of 0, 251
+ * and 210 ms). But a read that times out already MEANS "not yet", so there is
+ * nothing to be gained by waiting for it: ask briefly, take silence for an
+ * answer, and come back next frame. WIN_SETTLE_DEADLINE_SEC above, not this, is
+ * what eventually decides that a window is never going to move.
+ */
+#define WIN_SETTLE_READ_TIMEOUT_SEC 0.03
+
 /* Minimise the front window - the same one win_acquire would take, by the same
  * rule, except that a window whose size is fixed is minimised happily.
  *

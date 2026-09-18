@@ -404,8 +404,16 @@ win_status win_minimize_settled(void)
     if (g_minimised == NULL)
         return WIN_ERR_NO_WINDOW;
 
+    /* Ask briefly. A busy application answers nothing at all, and waiting the
+     * usual quarter second for that silence is what this call exists not to do;
+     * silence is already the answer. The timeout goes back afterwards so that
+     * everything else done to this element - win_restore's write, above all -
+     * gets the normal patience. */
+    AXUIElementSetMessagingTimeout(g_minimised, (float)WIN_SETTLE_READ_TIMEOUT_SEC);
     int minimised = 0;
     win_status status = read_bool(g_minimised, kAXMinimizedAttribute, &minimised);
+    AXUIElementSetMessagingTimeout(g_minimised, AX_TIMEOUT_SEC);
+
     if (status == WIN_OK && minimised)
         return WIN_OK; /* it is in the Dock: done */
 
