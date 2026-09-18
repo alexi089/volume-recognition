@@ -80,6 +80,8 @@ struct gv_ctx {
     int step_resize_active;  /* a resize is armed and the window was asked for */
     int step_window_held;    /* ... and we got it, so it must be let go */
     int step_acquire_status; /* how asking went (a win_status), repeated while armed */
+    double step_last_write_t;  /* frame time of the last window write; -INFINITY on acquire */
+    int    step_write_pending; /* a changed scale is waiting for the next allowed frame */
 };
 
 /*

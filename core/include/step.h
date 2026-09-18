@@ -53,6 +53,11 @@ typedef struct {
  *            write each changed scale, let go when the gesture ends. A gesture
  *            that ends by rolling back sends one last changed scale on its
  *            final frame; that is written BEFORE the window is let go.
+ *            Writes are throttled to at most one per cfg.win_write_interval_sec
+ *            while armed: a change inside that interval is not dropped, it is
+ *            written on the first frame the interval allows; the gesture's
+ *            last word (the frame the state goes no longer ARMED) is always
+ *            written at once, whatever the interval.
  */
 gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *backends);
 

@@ -110,7 +110,8 @@ def main() -> int:
         check(abs(c.scale_min - 0.1) < 1e-6 and abs(c.resize_rate_max - 2.0) < 1e-6
               and abs(c.release_rollback_sec - 0.3) < 1e-6,
               "the resize fields line up")
-        check(abs(c.resize_rate_gain - 4.5) < 1e-6,
+        check(abs(c.resize_rate_gain - 4.5) < 1e-6, "the resize fields, second-to-last, line up")
+        check(abs(c.win_write_interval_sec - 0.06) < 1e-6,
               "the resize fields, down to the very last one, line up")
     try:
         bridge.Gesture(aspect=aspect, gain=float("nan"))

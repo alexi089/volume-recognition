@@ -88,6 +88,7 @@ class Config(C.Structure):
         ("release_rollback_sec", C.c_float),
         ("resize_dead_zone", C.c_float),
         ("resize_rate_gain", C.c_float),
+        ("win_write_interval_sec", C.c_float),
     ]
 
 

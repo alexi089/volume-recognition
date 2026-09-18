@@ -102,6 +102,8 @@ gv_config gv_default_config(void)
          * the guided clips exist (see gesture.h). */
         .resize_dead_zone  = 0.08f,
         .resize_rate_gain  = 4.5f,
+        /* About every other frame at 30 fps. See gesture.h. */
+        .win_write_interval_sec = 0.06f,
     };
     return cfg;
 }
@@ -146,7 +148,8 @@ static int config_is_valid(const gv_config *c)
                    c->release_rollback_sec >= 0.0f && isfinite(c->release_rollback_sec) &&
                    c->resize_dead_zone >= 0.0f && c->resize_dead_zone < 1.0f &&
                    isfinite(c->resize_dead_zone) &&
-                   c->resize_rate_gain >= 0.0f && isfinite(c->resize_rate_gain);
+                   c->resize_rate_gain >= 0.0f && isfinite(c->resize_rate_gain) &&
+                   c->win_write_interval_sec >= 0.0f && isfinite(c->win_write_interval_sec);
 
     return pose_ok && gate_ok && scale_ok &&
            c->aspect > 0.0f && isfinite(c->aspect) &&

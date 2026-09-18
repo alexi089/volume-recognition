@@ -218,6 +218,29 @@ static void step_pinch(gv_ctx *ctx, float from, float to, double seconds)
     }
 }
 
+/* Copied from test_resize.c: the pinch blend `k` that puts the gap at `offset`
+ * relative to the gap at k0. Under rate control, holding a fixed offset (not
+ * zero, and outside the dead zone) keeps the scale moving at a fixed rate, so
+ * unlike a ramp its `changed` fires on essentially every frame - what the
+ * throttle tests below need. See k_for_offset_from_hits_the_asked_offset in
+ * test_resize.c for a direct check that this bisection lands where asked. */
+static float k_for_offset_from(float k0, float offset)
+{
+    gv_frame base_frame = pinch(k0);
+    float base = gv_pinch_gap(&base_frame, FIXTURE_REAL_ASPECT);
+    float lo = -0.4f, hi = 0.6f;
+    for (int i = 0; i < 40; i++) {
+        float mid = (lo + hi) / 2.0f;
+        gv_frame f = pinch(mid);
+        if (gv_pinch_gap(&f, FIXTURE_REAL_ASPECT) / base - 1.0f > offset) lo = mid; else hi = mid;
+    }
+    return (lo + hi) / 2.0f;
+}
+
+/* The common case: an offset relative to the gap at k = 0, the arming gap of
+ * every test below that arms with step_pinch(ctx, 0.0f, 0.0f, ...). */
+static float k_for_offset(float offset) { return k_for_offset_from(0.0f, offset); }
+
 static void arming_a_resize_takes_hold_of_the_window_once_and_writes_nothing(void)
 {
     fake_reset(0.40f);
@@ -281,6 +304,122 @@ static void the_rolled_back_scale_is_written_before_the_window_is_let_go(void)
     CHECK(last.out.state == GV_IDLE);
     CHECK(lowest_written < set - 0.01f);          /* the closing hand did drag the window down ... */
     CHECK_NEAR(fake_last_scale, set, 0.015);      /* ... and the last write put it back */
+    CHECK(fake_release_calls == 1);
+    CHECK(fake_applies_after_release == 0);
+    gv_destroy(ctx);
+}
+
+/* Writes are throttled: at most one every win_write_interval_sec, so a resize
+ * armed while the window is being dragged does not cost 30 window writes a
+ * second (measured at ~14 ms each; that is what dropped the camera loop from
+ * 30 to 16 fps live). Steady motion still gets written, just not every frame.
+ *
+ * A ramp from 0 to 0.3 (as the brief first suggests) spends its first 14 of 30
+ * frames inside the 8% resize_dead_zone, where nothing changes at all - not
+ * "steady change". Holding a fixed offset instead (via k_for_offset, as
+ * test_resize.c does) keeps the rate-control integrator moving every frame, so
+ * `changed` is 1 on essentially every one of the 30 frames measured. Checked:
+ * a frame-by-frame probe of the plain ramp counted `last.out.changed` true on
+ * only 13 of the 30 frames (confirmed empirically before this fix, see the
+ * report); the fixed-offset motion changes on all 30. */
+static void window_writes_are_throttled_but_nothing_is_lost(void)
+{
+    fake_reset(0.40f);
+    gv_config cfg = gv_default_config();
+    cfg.aspect = FIXTURE_REAL_ASPECT;
+    cfg.win_write_interval_sec = 0.06f; /* about every other frame at 30 fps */
+    gv_ctx *ctx = gv_create(&cfg);
+    now = 0.0;
+    step_pinch(ctx, 0.0f, 0.0f, 0.5);
+    float k = k_for_offset(-0.30f); /* well past the 8% dead zone, moves every frame */
+    int before = fake_apply_calls;
+    step_pinch(ctx, k, k, 1.0); /* 30 frames of steady change */
+    int writes = fake_apply_calls - before;
+    CHECK(writes >= 14 && writes <= 16); /* every other frame, not every frame */
+    /* The write cadence (every other frame, starting the frame the gesture's
+     * first change fires) does not necessarily land ON the very last of these
+     * 30 frames; one more frame at the same offset - still moving, since a
+     * held offset never settles under rate control - is what the interval
+     * allows next, and it is not counted in `writes` above. */
+    step_pinch(ctx, k, k, DT);
+    CHECK_NEAR(fake_last_scale, last.out.scale, 1e-6); /* the latest value, never a stale one */
+    CHECK(fake_applies_after_release == 0);
+    gv_destroy(ctx);
+}
+
+/* A change that lands inside the interval is not dropped: it is written on the
+ * first frame the interval allows, even if that frame itself changed nothing.
+ *
+ * The brief's original motion held the last two frames at the same non-zero
+ * k (0.32) it jumped to. Under rate control that offset is still outside
+ * resize_dead_zone, so - as in window_writes_are_throttled_but_nothing_is_lost
+ * above - a "held" non-zero offset keeps moving every frame; it never becomes
+ * two frames "that do not [change]", so nothing this test captured as `wanted`
+ * would still be current by the time it checked. Two changes: the hold
+ * returns to the arming gap (k = 0.0, offset 0, inside the dead zone), which
+ * genuinely stops the scale moving; and the moving phase is shortened by one
+ * frame (0.3 - DT instead of 0.3) so the jump frame lands on a throttled
+ * (skipped) frame rather than a frame the interval happened to already allow -
+ * confirmed with a frame-by-frame probe (see task-2-report.md) - so the test
+ * actually exercises "arrives inside the interval", not a coincidental hit. */
+static void a_change_that_arrives_inside_the_interval_is_written_on_the_next_allowed_frame(void)
+{
+    fake_reset(0.40f);
+    gv_config cfg = gv_default_config();
+    cfg.aspect = FIXTURE_REAL_ASPECT;
+    cfg.win_write_interval_sec = 0.06f;
+    gv_ctx *ctx = gv_create(&cfg);
+    now = 0.0;
+    step_pinch(ctx, 0.0f, 0.0f, 0.5);
+    step_pinch(ctx, 0.0f, 0.3f, 0.3 - DT); /* moving */
+    /* one more frame that changes, then two frames that do not: the change must land */
+    step_pinch(ctx, 0.3f, 0.32f, DT);
+    float wanted = last.out.scale;
+    step_pinch(ctx, 0.0f, 0.0f, 2 * DT); /* back at the arming gap: genuinely still */
+    CHECK_NEAR(fake_last_scale, wanted, 1e-6);
+    gv_destroy(ctx);
+}
+
+/* Whatever the interval, a gesture's last word (the rolled-back scale on the
+ * frame the state goes IDLE) is written at once: releasing never waits for the
+ * next allowed frame. Same shape as the_rolled_back_scale_is_written_before_the_
+ * window_is_let_go, but with an interval long enough (0.5 s, against a ~0.7 s
+ * closing motion) that the release write lands well inside the interval since
+ * the previous one - only the `!armed_resize` override, not a naturally due
+ * frame, can produce it. (1.0 s, tried first, blocked every write during the
+ * closing dip too, so the stale value already at the window happened to equal
+ * the rolled-back one anyway and the check could not tell a working override
+ * from a broken one; confirmed with a frame-by-frame probe, see the report.) */
+static void the_last_word_is_written_whatever_the_interval(void)
+{
+    fake_reset(0.40f);
+    gv_config cfg = gv_default_config();
+    cfg.aspect = FIXTURE_REAL_ASPECT;
+    cfg.win_write_interval_sec = 0.5f;
+    gv_ctx *ctx = gv_create(&cfg);
+    now = 0.0;
+    step_pinch(ctx, 0.0f, 0.0f, 0.5);  /* arm at neutral */
+    step_pinch(ctx, 0.0f, 0.3f, 0.6);  /* move off-centre briefly by rate ... */
+    step_pinch(ctx, 0.3f, 0.0f, 0.15); /* ... back toward neutral ... */
+    step_pinch(ctx, 0.0f, 0.0f, 0.6);  /* ... and held still: the size settles */
+    float set = last.out.scale;
+
+    gv_frame from = pinch(0.0f), fist = aligned_to(&fixture_real_fist, &fixture_real_pinch_open);
+    float lowest_written = set;
+    for (int i = 1; i <= 21; i++) { /* 0.2 s closing into the recorded fist, then held */
+        float k = i <= 6 ? (float)i / 6.0f : 1.0f;
+        gv_frame f = from;
+        for (int j = 0; j < GV_NUM_LANDMARKS; j++) {
+            f.lm[j].x = from.lm[j].x + (fist.lm[j].x - from.lm[j].x) * k;
+            f.lm[j].y = from.lm[j].y + (fist.lm[j].y - from.lm[j].y) * k;
+        }
+        step_frame(ctx, &f);
+        if (fake_last_scale < lowest_written)
+            lowest_written = fake_last_scale;
+    }
+    CHECK(last.out.state == GV_IDLE);
+    CHECK(lowest_written < set - 0.01f);      /* the closing hand did reach the window ... */
+    CHECK_NEAR(fake_last_scale, set, 0.015);  /* ... and the last write put it back */
     CHECK(fake_release_calls == 1);
     CHECK(fake_applies_after_release == 0);
     gv_destroy(ctx);
@@ -429,6 +568,9 @@ int main(void)
     RUN(arming_a_resize_takes_hold_of_the_window_once_and_writes_nothing);
     RUN(a_changed_scale_is_written_to_the_window);
     RUN(the_rolled_back_scale_is_written_before_the_window_is_let_go);
+    RUN(window_writes_are_throttled_but_nothing_is_lost);
+    RUN(a_change_that_arrives_inside_the_interval_is_written_on_the_next_allowed_frame);
+    RUN(the_last_word_is_written_whatever_the_interval);
     RUN(a_hand_that_leaves_lets_go_of_the_window_once);
     RUN(a_second_gesture_takes_hold_of_its_own_window);
     RUN(a_window_that_cannot_be_taken_is_reported_and_left_alone);

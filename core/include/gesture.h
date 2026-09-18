@@ -160,6 +160,12 @@ typedef struct {
      * are proxies until the guided clips exist. */
     float resize_dead_zone;
     float resize_rate_gain;
+    /* One window write costs about 14 ms; done every frame it dropped the
+     * camera loop from 30 to 16 fps in the first live session. While a resize
+     * is armed, gv_step (step.c) writes at most once per this many seconds -
+     * about every other frame at 0.06 and 30 fps. See "Jitter and frame rate"
+     * in the design doc. */
+    float win_write_interval_sec;
 } gv_config;
 
 /* The tuned defaults. Start from these and override single fields. */

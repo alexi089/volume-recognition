@@ -1,6 +1,8 @@
 #include "step.h"
 
-#include "gesture_internal.h" /* the three step_ fields of gv_ctx */
+#include <math.h> /* INFINITY */
+
+#include "gesture_internal.h" /* the step_ fields of gv_ctx */
 
 gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *backends)
 {
@@ -38,6 +40,11 @@ gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *ba
         ctx->step_resize_active = 1;
         ctx->step_acquire_status = (int)window->acquire();
         ctx->step_window_held = (ctx->step_acquire_status == WIN_OK);
+        /* -INFINITY, not 0: the first change after acquiring must write at
+         * once, whatever win_write_interval_sec is, not wait out an interval
+         * measured from a time before this gesture existed. */
+        ctx->step_last_write_t = -INFINITY;
+        ctx->step_write_pending = 0;
     }
     if (ctx->step_resize_active) {
         /* Without a window, keep saying why for as long as the hand is up. */
@@ -46,8 +53,19 @@ gv_step_result gv_step(gv_ctx *ctx, const gv_frame *frame, const gv_backends *ba
          * on the frame it goes idle, and the window must hear it. No check of
          * the kind is needed: from the frame a resize arms to the frame it
          * ends, the only `changed` the core can report is that resize's. */
+        /* Writes are throttled: one costs about 14 ms and dropped the camera
+         * loop to 16 fps when done every frame. A change inside the interval
+         * is not lost, it is written on the first frame the interval allows;
+         * a gesture's last word (state no longer ARMED) is written at once. */
         if (ctx->step_window_held && r.out.changed)
+            ctx->step_write_pending = 1;
+        const double t = frame->t_sec;
+        const int due = t - ctx->step_last_write_t >= (double)ctx->cfg.win_write_interval_sec || !armed_resize;
+        if (ctx->step_window_held && ctx->step_write_pending && due) {
             r.win = window->apply(r.out.scale);
+            ctx->step_last_write_t = t;
+            ctx->step_write_pending = 0;
+        }
     }
     /*    Let go AFTER that last write, never before. */
     if (ctx->step_resize_active && !armed_resize) {
