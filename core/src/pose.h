@@ -118,4 +118,20 @@ float gv_hand_scale(const gv_frame *f, float aspect);
 float gv_palm_x(const gv_frame *f, float aspect);
 float gv_palm_y(const gv_frame *f);
 
+/* --- the open palm, for the minimise flick ------------------------------- */
+
+/* All four fingers extended (long AND straight, as gv_finger_is_extended
+ * judges each one) and the thumb out (gv_thumb_is_out). One finger down, or
+ * the thumb tucked or bent, is enough to say no: this is the same "confidently
+ * extended" bar the volume and resize arm poses use, not its relaxed cousin.
+ *
+ * This is a POSE ONLY. Like the arm and stay poses above, it says what shape
+ * the hand is, never what to do about it: a hand can sit open in front of the
+ * camera for as long as it likes (the waving and talking-hands recordings do
+ * this constantly) without anything firing. It is the precondition a flick
+ * gesture (a fast downward swipe of an open palm, see the design spec) checks
+ * before it also asks about motion; on its own it must never arm, stay, or
+ * change anything. */
+int gv_pose_is_open_palm(const gv_frame *f, float aspect, const gv_pose_limits *lim);
+
 #endif /* GV_POSE_H */

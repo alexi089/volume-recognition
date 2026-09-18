@@ -199,6 +199,17 @@ static const int k_palm[] = {
  * only works on a true array, never on a pointer to one. */
 #define PALM_COUNT ((int)(sizeof k_palm / sizeof k_palm[0]))
 
+int gv_pose_is_open_palm(const gv_frame *f, float aspect, const gv_pose_limits *lim)
+{
+    if (!f->present)
+        return 0;
+    return  gv_finger_is_extended(f, GV_FINGER_INDEX,  aspect, lim) &&
+            gv_finger_is_extended(f, GV_FINGER_MIDDLE, aspect, lim) &&
+            gv_finger_is_extended(f, GV_FINGER_RING,   aspect, lim) &&
+            gv_finger_is_extended(f, GV_FINGER_PINKY,  aspect, lim) &&
+            gv_thumb_is_out(f, aspect, lim);
+}
+
 float gv_palm_x(const gv_frame *f, float aspect)
 {
     float sum = 0.0f;

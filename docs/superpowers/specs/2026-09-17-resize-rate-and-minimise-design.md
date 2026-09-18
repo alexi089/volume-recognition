@@ -171,3 +171,31 @@ exactly, so this is the same recording, but the two counts most likely come
 from different measurement points (the original figure over actual backend
 writes through the pre-throttling glue, this one over the pure state
 machine's `changed` events) - the discrepancy was not run down further here.
+
+Task 3 (the open-palm pose) is built: `gv_pose_is_open_palm` (all four
+fingers `gv_finger_is_extended`, thumb `gv_thumb_is_out`). Measured first with
+`core/tools/measure_palm.py`, using the exact same limits as `pose.c`
+(extend_reach 1.20, extend_straight 0.93, thumb_extend_reach 1.05,
+thumb_extend_straight 0.67), on the fraction of hand-present frames each
+recording reads as an open palm:
+
+| recording | hand frames | open palm | fraction |
+| --- | --- | --- | --- |
+| `traces/take1/real_waving.csv` | 1,019 | 195 | 0.191 |
+| `traces/take1/real_talking_hands.csv` | 866 | 399 | 0.461 |
+| `traces/take1/real_cup_reach.csv` | 1,111 | 227 | 0.204 |
+| `traces/real_resize_second_session.csv` | 8,431 | 465 | 0.055 |
+| `fixture_real_open_palm` | 1 | 1 | 1.000 |
+
+The open-palm fixture reads as an open palm, as expected. The resize session
+reads as one on only 5.5% of its frames, also as expected: that clip is
+dominated by the pinch pose (middle/ring/pinky curled), which this rule
+requires NOT curled. The point of the other three numbers is the opposite of
+"rare": the pose alone must never fire anything, so it does not matter that
+waving (19%), cup-reach (20%) and especially talking-hands (46%) show an open
+palm on a large share of their frames - the flick gesture's motion check, not
+this pose, is what has to keep those clips at zero flicks. Talking-hands
+reading higher than waving was not anticipated going in (an open, gesturing
+hand while talking apparently holds this shape more than a waving hand does,
+which is often mid-motion, not fully splayed) - worth remembering when tuning
+the flick's negative corpus in the next task.

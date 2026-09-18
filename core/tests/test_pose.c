@@ -375,6 +375,62 @@ static void clearance_does_not_end_a_resize_under_way(void)
     CHECK(gv_pose_can_stay_resize(&fixture_real_pinch_open, REAL, &strict));
 }
 
+/* --- the open palm, for the minimise flick ------------------------------- */
+
+static void an_open_hand_reads_as_an_open_palm(void)
+{
+    CHECK(gv_pose_is_open_palm(&fixture_real_open_palm, REAL, &LIM));
+}
+
+/* Every other hand shape in the fixture set: a fist, a pinch, two fingers up,
+ * and a relaxed two (ring reach 1.12, in the ambiguous band, so "not
+ * confidently extended" here is doing real work, not just "curled"). */
+static void other_hand_shapes_are_not_an_open_palm(void)
+{
+    CHECK(!gv_pose_is_open_palm(&fixture_victory, FIXTURE_VICTORY_ASPECT, &LIM));
+    CHECK(!gv_pose_is_open_palm(&fixture_real_pinch_open, REAL, &LIM));
+    CHECK(!gv_pose_is_open_palm(&fixture_real_fist, REAL, &LIM));
+    CHECK(!gv_pose_is_open_palm(&fixture_real_relaxed_two, REAL, &LIM));
+}
+
+/* One finger down is enough to say no: an open palm missing the pinky must
+ * not be judged the same as an open palm. */
+static void one_folded_finger_is_not_an_open_palm(void)
+{
+    gv_frame pinky_down = with_finger_folded(&fixture_real_open_palm, GV_PINKY_MCP);
+    CHECK(gv_finger_is_curled(&pinky_down, GV_FINGER_PINKY, REAL, &LIM));
+    CHECK(!gv_pose_is_open_palm(&pinky_down, REAL, &LIM));
+}
+
+/* A bent thumb is enough to say no too, even though the four fingers are
+ * untouched: with_thumb_bent keeps the thumb's reach (still "long") but
+ * collapses its straightness, exactly as it does to fixture_real_pinch_open
+ * in a_long_but_bent_thumb_is_in_not_out above. */
+static void a_bent_thumb_is_not_an_open_palm(void)
+{
+    gv_frame bent = with_thumb_bent(&fixture_real_open_palm, REAL);
+    CHECK(gv_thumb_reach(&bent, REAL) > LIM.thumb_extend_reach);   /* still long */
+    CHECK(!gv_thumb_is_out(&bent, REAL, &LIM));                    /* but not straight */
+    CHECK(!gv_pose_is_open_palm(&bent, REAL, &LIM));
+}
+
+/* Mirroring flips every x, which is what turning the same hand over looks
+ * like in 2D; the pose is still the same shape, so it is still an open palm. */
+static void mirroring_an_open_palm_is_still_an_open_palm(void)
+{
+    gv_frame m = mirrored(&fixture_real_open_palm);
+    CHECK(gv_pose_is_open_palm(&m, REAL, &LIM));
+}
+
+/* Same guard as every other pose-level function in this file: an absent hand
+ * is never a pose, whatever its (garbage) landmarks look like. */
+static void absent_hand_is_never_an_open_palm(void)
+{
+    gv_frame f = fixture_real_open_palm;
+    f.present = 0;
+    CHECK(!gv_pose_is_open_palm(&f, REAL, &LIM));
+}
+
 /* --- which way the palm faces ------------------------------------------- */
 
 static void palm_turn_is_a_size_free_rotation_free_number(void)
@@ -477,6 +533,12 @@ int main(void)
     RUN(thumb_clearance_tells_a_held_out_thumb_from_a_resting_one);
     RUN(pointing_with_a_resting_thumb_cannot_arm_a_resize);
     RUN(clearance_does_not_end_a_resize_under_way);
+    RUN(an_open_hand_reads_as_an_open_palm);
+    RUN(other_hand_shapes_are_not_an_open_palm);
+    RUN(one_folded_finger_is_not_an_open_palm);
+    RUN(a_bent_thumb_is_not_an_open_palm);
+    RUN(mirroring_an_open_palm_is_still_an_open_palm);
+    RUN(absent_hand_is_never_an_open_palm);
     RUN(palm_turn_is_a_size_free_rotation_free_number);
     RUN(turning_the_hand_over_flips_the_sign);
     RUN(hand_scale_matches_measured_value);
